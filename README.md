@@ -14,5 +14,3 @@ An installation script is coming soon once the project takes shape. Stay tuned!
 - `POST /sessions/:id/auth` exchanges a password for a one-time, 60-second token.
 - `DELETE /sessions/:id?token=...` gracefully stops a session. Protected sessions require a token.
 - `WS /sessions/:id?token=...` attaches a listener. Protected sessions require a token.
-
-Listener WebSockets accept ZOMBS opcodes `3`, `4`, `7`, and `9`. Opcodes `6` and `10` are discarded without disconnecting the listener.
