@@ -9,13 +9,14 @@ This guide uses `http://127.0.0.1:50000` as the API URL.
 ## 1. Prerequisites
 
 - [Bun](https://bun.sh/) installed and available as `bun`.
-- A ZOMBS.io server IPv4 address. Dandelion expects an address such as
-  `123.45.67.89`, not a region name or domain name.
+- A ZOMBS.io server id, hostname, and IPv4 address. The id looks like `v1007`,
+  the hostname looks like `zombs-2d4ca620-0.eggs.gg`, and the port is always
+  `443`.
 - Network access to the selected game server on port `443`.
 - `curl` for the HTTP examples.
 
-Dandelion does not discover ZOMBS.io servers for you. Get the IPv4 address from
-the server information used by your ZOMBS.io client.
+Dandelion does not discover ZOMBS.io servers for you. Get the id, hostname, and
+IPv4 address from the server information used by your ZOMBS.io client.
 
 ## 2. Install and start Dandelion
 
@@ -50,8 +51,8 @@ A new installation returns `[]`.
 
 ## 3. Create a session
 
-Create a public session by replacing `203.0.113.10` with a real ZOMBS.io server
-IPv4 address:
+Create a public session by replacing the server fields with a real ZOMBS.io
+server id, hostname, and IPv4 address:
 
 ```bash
 curl --fail-with-body --silent --show-error \
@@ -59,7 +60,9 @@ curl --fail-with-body --silent --show-error \
   --header 'content-type: application/json' \
   --data '{
     "sessionName": "My saved session",
-    "server": "203.0.113.10",
+    "id": "v1007",
+    "hostname": "zombs-2d4ca620-0.eggs.gg",
+    "ipAddress": "45.76.166.32",
     "plugins": []
   }'
 ```
@@ -80,7 +83,9 @@ The request fields are:
 | Field | Required | Rules | Purpose |
 | --- | --- | --- | --- |
 | `sessionName` | Yes | At most 29 characters | The ZOMBS.io display name and session label |
-| `server` | Yes | IPv4 address | The ZOMBS.io server to join |
+| `id` | Yes | `v` followed by 4 digits | The ZOMBS.io server id |
+| `hostname` | Yes | `zombs-[a-z0-9]+-0.eggs.gg` | The hostname used for the WebSocket |
+| `ipAddress` | Yes | IPv4 address | The IP address passed into the solver |
 | `plugins` | Yes | Array | Use `[]`; plugin loading is not active yet |
 | `psk` | No | Exactly 20 ASCII letters | Automatically joins that party share key after entering the world |
 | `password` | No | 8 to 32 characters | Protects WebSocket attachment and deletion |
@@ -93,7 +98,9 @@ curl --fail-with-body --silent --show-error \
   --header 'content-type: application/json' \
   --data '{
     "sessionName": "Protected saver",
-    "server": "203.0.113.10",
+    "id": "v1007",
+    "hostname": "zombs-2d4ca620-0.eggs.gg",
+    "ipAddress": "45.76.166.32",
     "plugins": [],
     "psk": "abcdefghijklmnopqrst",
     "password": "replace-this-password"
@@ -111,11 +118,11 @@ List every active session:
 curl --fail-with-body --silent --show-error "$BASE_URL/get-sessions"
 ```
 
-Filter by an exact server IPv4 address:
+Filter by an exact server id, hostname, or IPv4 address:
 
 ```bash
 curl --fail-with-body --silent --show-error \
-  "$BASE_URL/get-sessions?server=203.0.113.10"
+  "$BASE_URL/get-sessions?server=v1007"
 ```
 
 An active entry looks like:
@@ -127,7 +134,9 @@ An active entry looks like:
   "sessionName": "My saved session",
   "createdAt": "2026-06-19T01:00:00.000Z",
   "lastSeenAt": "2026-06-19T01:00:05.000Z",
-  "hostname": "203.0.113.10",
+  "serverId": "v1007",
+  "hostname": "zombs-2d4ca620-0.eggs.gg",
+  "ipAddress": "45.76.166.32",
   "status": "in-world",
   "ping": 42
 }
@@ -275,7 +284,7 @@ controls.
 
 ## Troubleshooting
 
-- **`Invalid server`:** pass a plain IPv4 address, without `wss://` or `:443`.
+- **`Invalid server`:** pass a valid `id`, `hostname`, and `ipAddress`.
 - **Session disappears while starting:** the game server rejected or lost the
   connection. Check the API terminal; a full server is one possible cause.
 - **WebSocket closes with `1008` immediately:** the session ID is inactive, the

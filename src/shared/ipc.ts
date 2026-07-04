@@ -27,7 +27,9 @@ export interface SessionHealth {
   sessionName: string;
   createdAt: string;
   lastSeenAt: string;
+  serverId: string;
   hostname: string;
+  ipAddress: string;
   status: DurableConnectionStatus;
   ping?: number;
 }
@@ -43,7 +45,9 @@ export type IpcMessage =
   | IpcEnvelope<"durable.status", {
     sessionId: SessionId;
     durableConnectionId: DurableConnectionId;
+    serverId: string;
     hostname: string;
+    ipAddress: string;
     status: DurableConnectionStatus;
     ping?: number;
     error?: string;

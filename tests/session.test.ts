@@ -36,7 +36,7 @@ test("session health uses the Engine-provided identity and name", () => {
   const session = new Session({
     sessionId: "session-id",
     sessionName: "test-session",
-    server: "127.0.0.1",
+    ...serverAddress(),
   }) as unknown as SessionTestHarness;
 
   expect(session.health.sessionId).toBe("session-id");
@@ -47,7 +47,7 @@ test("session validates listener inputs before forwarding them", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
-    server: "127.0.0.1",
+    ...serverAddress(),
   }) as unknown as SessionTestHarness;
   const sent: unknown[] = [];
   const codec = new MiniCodec();
@@ -85,7 +85,7 @@ test("synthesized sync data carries one consistent snapshot tick", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
-    server: "127.0.0.1",
+    ...serverAddress(),
   }) as unknown as SessionTestHarness;
 
   session.enterWorld = enterWorldData();
@@ -114,7 +114,7 @@ test("session validates listener RPCs against the live schema", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
-    server: "127.0.0.1",
+    ...serverAddress(),
   }) as unknown as SessionTestHarness;
   const sent: unknown[] = [];
   const rpc = rpcMap("SendChatMessage", "message");
@@ -152,7 +152,7 @@ test("session sends a configured party share key once", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
-    server: "127.0.0.1",
+    ...serverAddress(),
     psk: "abcdefghijklmnopqrst",
   }) as unknown as SessionTestHarness;
   const sent: unknown[] = [];
@@ -184,7 +184,7 @@ test("session caps chat history at 500 messages", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
-    server: "127.0.0.1",
+    ...serverAddress(),
   }) as unknown as SessionTestHarness;
 
   for (let marker = 0; marker < 501; marker++) {
@@ -218,6 +218,14 @@ function enterWorldData(): EnterWorldData {
     y1: 0,
     x2: 100,
     y2: 100,
+  };
+}
+
+function serverAddress() {
+  return {
+    serverId: "v1007",
+    hostname: "zombs-2d4ca620-0.eggs.gg",
+    ipAddress: "45.76.166.32",
   };
 }
 

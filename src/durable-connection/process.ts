@@ -10,14 +10,22 @@ const getArg = (name: string): string | undefined => {
 const readArgs = () => {
   const sessionId = getArg("--session-id") ;
   const durableConnectionId = getArg("--durable-id");
+  const serverId = getArg("--server-id");
   const hostname = getArg("--hostname");
+  const ipAddress = getArg("--ip-address");
+  const portArg = getArg("--port");
   const displayName = getArg("--display-name");
 
-  if (!sessionId || !durableConnectionId || !hostname || !displayName) {
+  if (!sessionId || !durableConnectionId || !serverId || !hostname || !ipAddress || !displayName) {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Missing durable-connection args");
   }
 
-  return { sessionId, durableConnectionId, hostname, displayName };
+  const port = portArg ? Number(portArg) : undefined;
+  if (port !== undefined && !Number.isInteger(port)) {
+    throw new DandelionError("INVALID_PROCESS_ARGS", "Invalid durable-connection port");
+  }
+
+  return { sessionId, durableConnectionId, serverId, hostname, ipAddress, port, displayName };
 };
 
 const main = async () => {

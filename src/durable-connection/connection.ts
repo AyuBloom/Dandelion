@@ -13,7 +13,10 @@ import { SolverWorker } from "./solver-worker.ts";
 interface DurableConnectionOptions {
   sessionId: SessionId;
   durableConnectionId: DurableConnectionId;
+  serverId: string;
   hostname: string;
+  ipAddress: string;
+  port?: number;
   displayName: string;
 }
 
@@ -61,7 +64,7 @@ export class DurableConnection {
   private exiting = false;
 
   constructor(private readonly options: DurableConnectionOptions) {
-    this.solver = new SolverWorker(options.hostname);
+    this.solver = new SolverWorker(options.ipAddress);
     this.solver.onUnexpectedExit((error) => this.fail(getErrorMessage(error)));
   }
 
@@ -117,11 +120,19 @@ export class DurableConnection {
   private connect(): void {
     this.publishStatus("connecting");
 
-    const socket = new WebSocket(`wss://${this.options.hostname}:443`);
+    const socket = new WebSocket(this.websocketUrl(), {
+      headers: {
+        Origin: "",
+        "User-Agent": "",
+      },
+    });
     socket.binaryType = "arraybuffer";
     this.socket = socket;
 
-    socket.onopen = () => this.publishStatus("waiting-pre-enter");
+    socket.onopen = () => {
+      this.publishStatus("waiting-pre-enter");
+      this.sendPacket(PacketIds.PACKET_PING, {});
+    };
     socket.onmessage = (event) => void this.handleMessageData(event.data);
     socket.onerror = () => this.fail("Connection error");
     socket.onclose = () => this.handleClose();
@@ -267,6 +278,11 @@ export class DurableConnection {
     this.send(packet);
   }
 
+  private websocketUrl(): string {
+    const port = this.options.port ?? 443;
+    return `wss://${this.options.hostname}:${port}`;
+  }
+
   private handleClose(): void {
     this.stopKeepalive();
     this.solver.close();
@@ -306,7 +322,9 @@ export class DurableConnection {
       payload: {
         sessionId: this.options.sessionId,
         durableConnectionId: this.options.durableConnectionId,
+        serverId: this.options.serverId,
         hostname: this.options.hostname,
+        ipAddress: this.options.ipAddress,
 
         status,
         ping: this.ping,

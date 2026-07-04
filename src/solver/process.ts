@@ -42,9 +42,11 @@ const getArg = (name: string): string | undefined => {
 };
 
 const readArgs = () => {
-  const hostname = getArg("--hostname");
-  if (!hostname) throw new DandelionError("INVALID_PROCESS_ARGS", "Missing --hostname");
-  return { hostname };
+  const ipAddress = getArg("--ip-address") ?? getArg("--hostname");
+  if (!ipAddress) {
+    throw new DandelionError("INVALID_PROCESS_ARGS", "Missing --ip-address");
+  }
+  return { ipAddress };
 };
 
 class SolverService {
@@ -65,7 +67,17 @@ class SolverService {
 
     this.solver._MakeBlendField(172, 36);
     const outputPtr = this.solver._MakeBlendField(4, 152);
-    return this.solver.HEAPU8.slice(outputPtr, outputPtr + 64).buffer as ArrayBuffer;
+    const output = this.solver.HEAPU8.slice(outputPtr, outputPtr + 64).buffer as ArrayBuffer;
+
+    if (process.env.SOLVER_DEBUG === "1") {
+      logger.info("Solver debug", {
+        opcode,
+        challengeBytes: challenge.byteLength,
+        ...this.solver.getDebugState(),
+      });
+    }
+
+    return output;
   }
 
   enterWorld2(): Uint8Array {
@@ -77,12 +89,12 @@ class SolverService {
 const respond = (message: SolverResponse) => parent.send?.(message);
 
 const main = async () => {
-  const { hostname } = readArgs();
-  const solver = new Solver(hostname);
+  const { ipAddress } = readArgs();
+  const solver = new Solver(ipAddress);
   await solver.init();
   const service = new SolverService(solver);
 
-  logger.info("Solver worker ready", { hostname, pid: process.pid });
+  logger.info("Solver worker ready", { ipAddress, pid: process.pid });
   parent.send?.({ type: "solver.ready", pid: process.pid });
 
   process.on("message", (message: SolverRequest) => {

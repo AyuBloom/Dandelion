@@ -27,12 +27,14 @@ import type {
   Vector2,
 } from "../shared/packets.ts";
 
+type SortedUidTable = Record<number, Uint32Array>;
+
 class MiniCodec {
   attributeMaps: Record<number, AttributeMapEntry[]>;
   entityTypeNames: Record<number, string>;
   rpcMaps: RpcMapEntry[];
   rpcMapsByName: Record<string, RpcMapEntry>;
-  sortedUidsByType: Record<number, number[]>;
+  sortedUidsByType: SortedUidTable;
   removedEntities: Record<number, number>;
   absentEntitiesFlags: number[];
   updatedEntityFlags: number[];
@@ -145,7 +147,7 @@ class MiniCodec {
 
       this.attributeMaps[entityType] = attributeMap;
       this.entityTypeNames[entityType] = entityTypeString;
-      this.sortedUidsByType[entityType] = [];
+      this.sortedUidsByType[entityType] = new Uint32Array(0);
     }
 
     const rpcCount = buffer.readUint32();
@@ -193,6 +195,7 @@ class MiniCodec {
     }
 
     const brandNewEntityTypeCount = readVarint32(buffer).value;
+    const newUidsByType = new Map<number, Uint32Array>();
     for (let i = 0; i < brandNewEntityTypeCount; i++) {
       const brandNewEntityCountForThisType = readVarint32(buffer).value;
       const brandNewEntityType = buffer.readUint32();
@@ -200,17 +203,26 @@ class MiniCodec {
       if (!sortedUids)
         throw new DandelionError("PACKET_CODEC_ERROR", "Entity type is not in UID table: " + brandNewEntityType);
 
+      if (brandNewEntityCountForThisType === 0) continue;
+
+      const newUids = new Uint32Array(brandNewEntityCountForThisType);
       for (let j = 0; j < brandNewEntityCountForThisType; j++) {
-        sortedUids.push(buffer.readUint32());
+        newUids[j] = buffer.readUint32();
       }
+
+      const existingNewUids = newUidsByType.get(brandNewEntityType);
+      newUidsByType.set(
+        brandNewEntityType,
+        existingNewUids ? concatUidArrays(existingNewUids, newUids) : newUids,
+      );
     }
 
-    for (const entityType in this.sortedUidsByType) {
-      const sortedUids = this.sortedUidsByType[entityType] ?? [];
-      this.sortedUidsByType[entityType] = sortedUids
-        .filter((uid) => !(uid in this.removedEntities))
-        .sort((a, b) => a - b);
-    }
+    applyUidTableChanges(
+      this.sortedUidsByType,
+      this.removedEntities,
+      removedEntityCount,
+      newUidsByType,
+    );
 
     while (buffer.remaining()) {
       const entityType = buffer.readUint32();
@@ -411,6 +423,80 @@ class MiniCodec {
     }
   }
 
+}
+
+function applyUidTableChanges(
+  sortedUidsByType: SortedUidTable,
+  removedEntities: Record<number, number>,
+  removedEntityCount: number,
+  newUidsByType: Map<number, Uint32Array>,
+): void {
+  if (removedEntityCount === 0 && newUidsByType.size === 0) return;
+
+  if (removedEntityCount > 0) {
+    for (const entityType in sortedUidsByType) {
+      const currentUids = sortedUidsByType[entityType] ?? new Uint32Array(0);
+      const filteredUids = filterRemovedUids(currentUids, removedEntities);
+      const newUids = newUidsByType.get(Number(entityType));
+
+      if (!newUids) {
+        sortedUidsByType[entityType] = filteredUids;
+        continue;
+      }
+
+      const updatedUids = concatUidArrays(filteredUids, newUids);
+      updatedUids.sort();
+      sortedUidsByType[entityType] = updatedUids;
+    }
+    return;
+  }
+
+  for (const [entityType, newUids] of newUidsByType) {
+    const currentUids = sortedUidsByType[entityType] ?? new Uint32Array(0);
+    const updatedUids = concatUidArrays(currentUids, newUids);
+    updatedUids.sort();
+    sortedUidsByType[entityType] = updatedUids;
+  }
+}
+
+function filterRemovedUids(
+  sortedUids: Uint32Array,
+  removedEntities: Record<number, number>,
+): Uint32Array {
+  let keptCount = 0;
+  for (let i = 0; i < sortedUids.length; i++) {
+    if (!hasRemovedUid(removedEntities, sortedUids[i]!)) keptCount++;
+  }
+
+  if (keptCount === sortedUids.length) return sortedUids;
+
+  const filteredUids = new Uint32Array(keptCount);
+  let index = 0;
+  for (let i = 0; i < sortedUids.length; i++) {
+    const uid = sortedUids[i]!;
+    if (!hasRemovedUid(removedEntities, uid)) {
+      filteredUids[index++] = uid;
+    }
+  }
+
+  return filteredUids;
+}
+
+function concatUidArrays(
+  first: Uint32Array,
+  second: Uint32Array,
+): Uint32Array {
+  const result = new Uint32Array(first.length + second.length);
+  result.set(first);
+  result.set(second, first.length);
+  return result;
+}
+
+function hasRemovedUid(
+  removedEntities: Record<number, number>,
+  uid: number,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(removedEntities, uid);
 }
 
 export default MiniCodec;

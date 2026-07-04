@@ -24,7 +24,10 @@ import { isValidListenerRpc, MAX_RPC_PACKET_BYTES } from "./rpc.ts";
 export interface SessionOptions {
   sessionId: SessionId;
   sessionName: string;
-  server: string;
+  serverId: string;
+  hostname: string;
+  ipAddress: string;
+  port?: number;
   psk?: string;
 }
 
@@ -64,9 +67,11 @@ export class Session {
   private readonly localBuildingsByUid = new Map<number, RpcObject>();
   private healthWrites = Promise.resolve();
   private pskSent = false;
+  private readonly port: number;
 
   constructor(private readonly options: SessionOptions) {
     const createdAt = new Date().toISOString();
+    this.port = options.port ?? 443;
 
     this.health = {
       sessionId: options.sessionId,
@@ -74,7 +79,9 @@ export class Session {
       sessionName: options.sessionName,
       createdAt,
       lastSeenAt: createdAt,
-      hostname: options.server,
+      serverId: options.serverId,
+      hostname: options.hostname,
+      ipAddress: options.ipAddress,
       status: "booting",
     };
 
@@ -125,8 +132,14 @@ export class Session {
         this.health.sessionId,
         "--durable-id",
         this.health.durableConnectionId,
+        "--server-id",
+        this.options.serverId,
         "--hostname",
-        this.options.server,
+        this.options.hostname,
+        "--ip-address",
+        this.options.ipAddress,
+        "--port",
+        String(this.port),
         "--display-name",
         this.options.sessionName,
       ],
@@ -149,6 +162,7 @@ export class Session {
         this.health.lastSeenAt = new Date().toISOString();
         this.health.status = message.payload.status;
         this.health.ping = message.payload.ping;
+        this.health.ipAddress = message.payload.ipAddress;
 
         this.queueHealthWrite();
         this.sendConfiguredPsk();

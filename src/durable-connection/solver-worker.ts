@@ -41,14 +41,14 @@ export class SolverWorker {
 
   readonly child: SolverChild;
 
-  constructor(private readonly hostname: string) {
+  constructor(private readonly ipAddress: string) {
     this.ready = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
 
     this.child = Bun.spawn({
-      cmd: [process.execPath, solverProcessPath, "--hostname", hostname],
+      cmd: [process.execPath, solverProcessPath, "--ip-address", ipAddress],
       stdin: "ignore",
       stdout: "inherit",
       stderr: "inherit",
@@ -133,7 +133,7 @@ export class SolverWorker {
   private handleMessage(message: unknown): void {
     if (isReadyMessage(message)) {
       logger.info("Solver worker attached", {
-        hostname: this.hostname,
+        ipAddress: this.ipAddress,
         pid: message.pid,
       });
       this.readyResolve();

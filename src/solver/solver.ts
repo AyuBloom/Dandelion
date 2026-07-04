@@ -13,7 +13,11 @@ type WasmExports = {
   m: () => number;
   n: (ptr: number) => void;
   o: (size: number) => number;
-  p: (ptr: number) => void;
+  p?: (ptr: number) => void;
+  free?: (ptr: number) => void;
+  zombs_last_selector?: () => number;
+  zombs_last_iterations?: () => number;
+  zombs_last_found?: () => number;
 };
 
 export default class Solver {
@@ -39,6 +43,9 @@ export default class Solver {
   stackRestore!: (ptr: number) => void;
   stackAlloc!: (size: number) => number;
   _free!: (ptr: number) => void;
+  zombsLastSelector?: () => number;
+  zombsLastIterations?: () => number;
+  zombsLastFound?: () => number;
 
   #scriptStringBufferPtr = 0;
   #scriptStringBufferSize = 0;
@@ -107,8 +114,9 @@ export default class Solver {
     return false;
   }
 
-  #emscriptenMemcpy(dest: number, src: number, num: number): void {
+  #emscriptenMemcpy(dest: number, src: number, num: number): number {
     this.HEAPU8.copyWithin(dest, src, src + num);
+    return dest;
   }
 
   async init(): Promise<void> {
@@ -139,7 +147,10 @@ export default class Solver {
     this.stackSave = exports.m;
     this.stackRestore = exports.n;
     this.stackAlloc = exports.o;
-    this._free = exports.p;
+    this._free = exports.p ?? exports.free ?? (() => {});
+    this.zombsLastSelector = exports.zombs_last_selector;
+    this.zombsLastIterations = exports.zombs_last_iterations;
+    this.zombsLastFound = exports.zombs_last_found;
 
     this.#run();
   }
@@ -312,5 +323,17 @@ export default class Solver {
     } catch (error) {
       logger.error(`WASM grow failed: ${getErrorMessage(error)}`);
     }
+  }
+
+  getDebugState(): Record<string, number> | undefined {
+    if (!this.zombsLastSelector || !this.zombsLastIterations || !this.zombsLastFound) {
+      return undefined;
+    }
+
+    return {
+      selector: this.zombsLastSelector(),
+      iterations: this.zombsLastIterations(),
+      found: this.zombsLastFound(),
+    };
   }
 }

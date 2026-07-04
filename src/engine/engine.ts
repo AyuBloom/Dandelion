@@ -20,6 +20,10 @@ import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
 import { logger } from "../shared/logger.ts";
+import {
+  matchesGameServerAddress,
+  parseGameServerAddress,
+} from "../shared/server-address.ts";
 
 interface SyncState {
   status: "waiting" | "syncing" | "live";
@@ -98,7 +102,14 @@ export class Engine {
       async ({ query: { server } }) => {
         const sessions = await this.getSessions();
         if (server) {
-          return sessions.filter(({ hostname }) => server === hostname);
+          return sessions.filter(
+            ({ serverId, hostname, ipAddress }) =>
+              matchesGameServerAddress(server, {
+                id: serverId,
+                hostname,
+                ipAddress,
+              }),
+          );
         }
         return sessions;
       },
@@ -106,7 +117,8 @@ export class Engine {
         query: t.Object({
           server: t.Optional(
             t.String({
-              format: "ipv4",
+              minLength: 1,
+              maxLength: 255,
               error: "Invalid server",
             }),
           ),
@@ -125,9 +137,19 @@ export class Engine {
             maxLength: 29,
             error: "Invalid name (tip: length must be under 29 characters)",
           }),
-          server: t.String({
+          id: t.String({
+            minLength: 5,
+            maxLength: 5,
+            pattern: "^v\\d{4}$",
+            error: "Invalid server id",
+          }),
+          hostname: t.String({
+            pattern: "^zombs-[a-z0-9]+-0\\.eggs\\.gg$",
+            error: "Invalid hostname",
+          }),
+          ipAddress: t.String({
             format: "ipv4",
-            error: "Invalid server",
+            error: "Invalid IP address",
           }),
           psk: t.Optional(
             t.String({
@@ -278,13 +300,18 @@ export class Engine {
 
   private async createSession(body: {
     sessionName: string;
-    server: string;
+    id: string;
+    hostname: string;
+    ipAddress: string;
     psk?: string;
     plugins: string[];
     password?: string;
   }): Promise<
     { ok: true; sessionId: SessionId } | { ok: false; error: string }
   > {
+    const gameServer = parseGameServerAddress(body);
+    if (!gameServer) return { ok: false, error: "Invalid server" };
+
     const sessionId = crypto.randomUUID();
     const args = [
       process.execPath,
@@ -293,8 +320,14 @@ export class Engine {
       sessionId,
       "--session-name",
       body.sessionName,
-      "--server",
-      body.server,
+      "--server-id",
+      gameServer.id,
+      "--hostname",
+      gameServer.hostname,
+      "--ip-address",
+      gameServer.ipAddress,
+      "--port",
+      String(gameServer.port),
     ];
     if (body.psk) {
       args.push("--psk", body.psk);
