@@ -6,7 +6,21 @@ Dandelion is a project aimed at creating a standardized & stable Session Saver f
 
 ## Installation
 
-An installation script is coming soon once the project takes shape. Stay tuned!
+Install with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AyuBloom/Dandelion/main/install.sh | bash
+```
+
+The one-line installer clones Dandelion into `./Dandelion` from your current directory, installs Bun if needed, and runs `bun install --frozen-lockfile`.
+
+If you already have the repository checked out, run the installer from the project root:
+
+```bash
+./install.sh
+```
+
+Use `./install.sh --verify` to install dependencies, run TypeScript checking, and run the root `tests/` suite.
 
 ## API
 
