@@ -12,7 +12,7 @@ Install with one command:
 curl -fsSL https://raw.githubusercontent.com/AyuBloom/Dandelion/main/install.sh | bash
 ```
 
-The one-line installer clones Dandelion into `./Dandelion` from your current directory, installs Bun if needed, and runs `bun install --frozen-lockfile`.
+The one-line installer clones Dandelion into `./Dandelion` from your current directory, installs Bun if needed, runs `bun install --frozen-lockfile`, and prints the next commands to run.
 
 If you already have the repository checked out, run the installer from the project root:
 

@@ -47,6 +47,10 @@ error() {
   print_log "$COLOR_ERROR" "error" "$@" >&2
 }
 
+plain() {
+  printf "%s\n" "$*"
+}
+
 die() {
   error "$@"
   exit 1
@@ -71,6 +75,11 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+shell_quote() {
+  local value="$1"
+  printf "'%s'" "${value//\'/\'\\\'\'}"
+}
+
 cleanup() {
   if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
     rm -rf "$TMP_DIR"
@@ -83,6 +92,29 @@ source_looks_like_project() {
   local dir="$1"
 
   [[ -f "$dir/package.json" && -f "$dir/bun.lock" && -f "$dir/src/shared/logger.ts" ]]
+}
+
+run_quiet() {
+  local failure_message="$1"
+  shift
+
+  local output_file
+  output_file="$(mktemp)"
+
+  if [[ "$VERBOSE" -eq 1 ]]; then
+    if ! "$@"; then
+      error "$failure_message"
+      rm -f "$output_file"
+      exit 1
+    fi
+  elif ! "$@" >"$output_file" 2>&1; then
+    error "$failure_message"
+    cat "$output_file" >&2
+    rm -f "$output_file"
+    exit 1
+  fi
+
+  rm -f "$output_file"
 }
 
 find_local_project_root() {
@@ -123,8 +155,8 @@ download_source_archive() {
   TMP_DIR="$(mktemp -d)"
   mkdir -p "$target"
 
-  log "Downloading Dandelion from $archive"
-  curl -fL "$archive" -o "$TMP_DIR/dandelion.tar.gz"
+  log "Downloading Dandelion"
+  curl -fsSL "$archive" -o "$TMP_DIR/dandelion.tar.gz"
   mkdir -p "$TMP_DIR/source"
   tar -xzf "$TMP_DIR/dandelion.tar.gz" -C "$TMP_DIR/source" --strip-components=1
   cp -R "$TMP_DIR/source/." "$target/"
@@ -145,8 +177,8 @@ ensure_source() {
   mkdir -p "$(dirname -- "$target")"
 
   if command_exists git; then
-    log "Cloning Dandelion into $target"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$target"
+    log "Cloning Dandelion"
+    run_quiet "Failed to clone Dandelion." git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$target"
   else
     download_source_archive "$target"
   fi
@@ -213,9 +245,9 @@ install_dependencies() {
     install_args+=("--frozen-lockfile")
   fi
 
-  log "Installing project dependencies"
+  log "Installing dependencies"
   debug "Running: bun ${install_args[*]}"
-  bun "${install_args[@]}"
+  run_quiet "Failed to install dependencies." bun "${install_args[@]}"
 }
 
 run_verification() {
@@ -224,6 +256,29 @@ run_verification() {
 
   log "Running tests"
   bun test tests/
+}
+
+print_next_steps() {
+  local root="$1"
+  local quoted_root
+  quoted_root="$(shell_quote "$root")"
+
+  plain ""
+  info "Installation complete"
+  plain ""
+  plain "Dandelion was installed at:"
+  plain "  $root"
+  plain ""
+  plain "Next steps:"
+  plain "  cd $quoted_root"
+  plain "  bun run src/index.ts"
+  plain ""
+  plain "The API listens on port 50000 by default. To use another port:"
+  plain "  API_PORT=8080 bun run src/index.ts"
+  plain ""
+  plain "To verify the code:"
+  plain "  bunx tsc --noEmit"
+  plain "  bun test tests/"
 }
 
 main() {
@@ -272,6 +327,7 @@ main() {
   fi
 
   cd "$root"
+  root="$(pwd -P)"
 
   info "Installing Dandelion from $root"
   ensure_bun
@@ -283,7 +339,7 @@ main() {
     info "Skipping verification. Run ./install.sh --verify to typecheck and test."
   fi
 
-  info "Installation complete"
+  print_next_steps "$root"
 }
 
 main "$@"
