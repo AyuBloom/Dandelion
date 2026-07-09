@@ -15,7 +15,6 @@ If you already have the repository checked out, run the installer from the proje
 ./install.sh
 ```
 Use `./install.sh --verify` to install dependencies, run TypeScript checking, and run the root `tests/` suite.
-
 ### For Windows
 Install with one command from PowerShell:
 ```powershell
@@ -28,7 +27,6 @@ If you already have the repository checked out, run the installer from the proje
 Use `.\install.ps1 -Verify` to install dependencies, run TypeScript checking, and run the root `tests/` suite.
 
 ## API
-
 - `POST /create-session` returns `202` with `{ ok: true, sessionId }`.
 - `POST /sessions/:id/auth` exchanges a password for a one-time, 60-second token.
 - `DELETE /sessions/:id?token=...` gracefully stops a session. Protected sessions require a token.
