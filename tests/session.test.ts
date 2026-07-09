@@ -28,6 +28,7 @@ interface SessionTestHarness {
   chatPackets: ArrayBuffer[];
   synthesizeSyncPackets(): SyncData | undefined;
   handleEngineIPC(message: IpcMessage): void;
+  forwardDurablePacket(data: ArrayBuffer): void;
   recordRpcPacket(packet: RpcData, data: ArrayBuffer): void;
   sendConfiguredPsk(): void;
 }
@@ -201,6 +202,35 @@ test("session caps chat history at 500 messages", () => {
 test("entity ticks are read without decoding the entity payload", () => {
   const packet = Uint8Array.of(PacketIds.PACKET_ENTITY_UPDATE, 0x78, 0x56, 0x34, 0x12);
   expect(readEntityTick(packet.buffer)).toBe(0x12345678);
+});
+
+test("session drops pre-enter handshake packets before engine forwarding", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const sent: unknown[] = [];
+  const parent = process as unknown as {
+    send?: (message: unknown) => boolean;
+  };
+  const previousSend = parent.send;
+
+  parent.send = (message) => {
+    sent.push(message);
+    return true;
+  };
+
+  try {
+    session.forwardDurablePacket(
+      Uint8Array.of(PacketIds.PACKET_PRE_ENTER_WORLD, 1, 2, 3).buffer,
+    );
+  } finally {
+    if (previousSend) parent.send = previousSend;
+    else delete parent.send;
+  }
+
+  expect(sent).toEqual([]);
 });
 
 function enterWorldData(): EnterWorldData {

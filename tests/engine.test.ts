@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test";
+import { mkdir, rm } from "node:fs/promises";
 
 import { PacketIds } from "../src/network/enums.ts";
 import MiniCodec from "../src/network/mini-codec.ts";
-import type { IpcMessage, SyncData } from "../src/shared/ipc.ts";
+import type { IpcMessage, SessionHealth, SyncData } from "../src/shared/ipc.ts";
 import { Engine } from "../src/engine/engine.ts";
+import {
+  getSessionControlPath,
+  readSessionControlFrames,
+  SESSION_CONTROL_DIRECTORY,
+  type SessionControlSocketData,
+  writeSessionControlFrame,
+} from "../src/shared/session-control.ts";
 
 interface TestListener {
   id: string;
@@ -80,6 +88,8 @@ interface EngineTestHarness {
     listenerId: string,
     syncData: SyncData,
   ): void;
+  reattachSessions(sessions: SessionHealth[]): Promise<void>;
+  sendToSession(sessionId: string, message: IpcMessage): boolean;
 }
 
 test("entity update ticks flush the latest scheduled listener inputs", () => {
@@ -438,6 +448,72 @@ test("terminal sessions close and remove all listeners", () => {
   expect(engine.listenersBySession.has(sessionId)).toBeFalse();
 });
 
+test("engine reattaches live session control sockets", async () => {
+  const engine = new Engine() as unknown as EngineTestHarness;
+  const sessionId = crypto.randomUUID();
+  const socketPath = getSessionControlPath(sessionId);
+  const received: IpcMessage[] = [];
+  const terminateSignals: string[] = [];
+  const health = sessionHealth(sessionId);
+
+  await mkdir(SESSION_CONTROL_DIRECTORY, { recursive: true });
+  await rm(socketPath, { force: true });
+
+  const server = Bun.listen<SessionControlSocketData>({
+    unix: socketPath,
+    socket: {
+      open: (socket) => {
+        socket.data = { buffer: "" };
+        writeSessionControlFrame(socket, {
+          type: "ipc",
+          message: {
+            type: "session.health",
+            from: "session",
+            to: "engine",
+            payload: health,
+          },
+        });
+      },
+      data: (socket, data) => {
+        socket.data.buffer = readSessionControlFrames(
+          socket.data.buffer,
+          data,
+          (frame) => {
+            if (frame.type === "ipc") {
+              received.push(frame.message);
+            } else {
+              terminateSignals.push(frame.signal);
+            }
+          },
+        );
+      },
+    },
+  });
+
+  try {
+    await engine.reattachSessions([health]);
+    expect(engine.sessions.has(sessionId)).toBeTrue();
+
+    const syncMessage: IpcMessage = {
+      type: "engine.sync",
+      from: "engine",
+      to: "session",
+      payload: { sessionId, listenerId: "listener" },
+    };
+    expect(engine.sendToSession(sessionId, syncMessage)).toBeTrue();
+
+    await Bun.sleep(25);
+    expect(received).toEqual([syncMessage]);
+
+    expect(await engine.stopSession(sessionId)).toEqual({ ok: true });
+    await Bun.sleep(25);
+    expect(terminateSignals).toEqual(["SIGTERM"]);
+  } finally {
+    server.stop(true);
+    await rm(socketPath, { force: true });
+  }
+});
+
 test("sync queues close listeners instead of growing without a bound", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sessionId = "session";
@@ -513,6 +589,21 @@ function entityPacket(marker: number): ArrayBuffer {
 
 function packet(opcode: PacketIds, marker = 0): ArrayBuffer {
   return Uint8Array.of(opcode, marker).buffer;
+}
+
+function sessionHealth(sessionId: string): SessionHealth {
+  const now = new Date().toISOString();
+  return {
+    sessionId,
+    durableConnectionId: crypto.randomUUID(),
+    sessionName: "test",
+    createdAt: now,
+    lastSeenAt: now,
+    serverId: "v1007",
+    hostname: "zombs-2d4ca620-0.eggs.gg",
+    ipAddress: "45.76.166.32",
+    status: "in-world",
+  };
 }
 
 function listener(id: string, sessionId: string): TestListener {

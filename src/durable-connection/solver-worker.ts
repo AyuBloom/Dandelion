@@ -15,20 +15,6 @@ type PendingCall = {
 
 type ExitHandler = (error: DandelionError) => void;
 
-type SolverResponse =
-  | {
-      id: string;
-      ok: true;
-      payload: {
-        extra: ArrayBuffer | Uint8Array;
-      };
-    }
-  | {
-      id: string;
-      ok: false;
-      error: string;
-    };
-
 const solverProcessPath = fileURLToPath(new URL("../solver/process.ts", import.meta.url));
 
 export class SolverWorker {
@@ -131,43 +117,42 @@ export class SolverWorker {
   }
 
   private handleMessage(message: unknown): void {
-    if (isReadyMessage(message)) {
-      logger.info("Solver worker attached", {
+    if (typeof message !== "object" || message === null) return;
+
+    const response = message as Record<string, unknown>;
+    if (response.type === "solver.ready" && typeof response.pid === "number") {
+      logger.debug("Solver worker attached", {
         ipAddress: this.ipAddress,
-        pid: message.pid,
+        pid: response.pid,
       });
       this.readyResolve();
       return;
     }
 
-    if (!isSolverResponse(message)) return;
-
-    const pending = this.pending.get(message.id);
-    if (!pending) return;
-
-    this.pending.delete(message.id);
-
-    if (message.ok) {
-      pending.resolve(message.payload.extra);
+    if (typeof response.id !== "string" || typeof response.ok !== "boolean") {
       return;
     }
 
-    pending.reject(new DandelionError("SOLVER_IPC_FAILED", message.error));
+    const pending = this.pending.get(response.id);
+    if (!pending) return;
+
+    if (response.ok) {
+      if (typeof response.payload !== "object" || response.payload === null) {
+        return;
+      }
+
+      const extra = (response.payload as Record<string, unknown>).extra;
+      if (!(extra instanceof Uint8Array || extra instanceof ArrayBuffer)) {
+        return;
+      }
+
+      this.pending.delete(response.id);
+      pending.resolve(extra);
+      return;
+    }
+
+    if (typeof response.error !== "string") return;
+    this.pending.delete(response.id);
+    pending.reject(new DandelionError("SOLVER_IPC_FAILED", response.error));
   }
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const isReadyMessage = (value: unknown): value is { type: "solver.ready"; pid: number } =>
-  isRecord(value) && value.type === "solver.ready" && typeof value.pid === "number";
-
-const isSolverResponse = (value: unknown): value is SolverResponse =>
-  isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.ok === "boolean" &&
-  (value.ok
-    ? isRecord(value.payload) &&
-      (value.payload.extra instanceof Uint8Array ||
-        value.payload.extra instanceof ArrayBuffer)
-    : typeof value.error === "string");

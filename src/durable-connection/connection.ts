@@ -145,27 +145,19 @@ export class DurableConnection {
       switch (opcode) {
         case PacketIds.PACKET_PRE_ENTER_WORLD:
           await this.handlePreEnterWorld(bytes);
-          break;
+          return;
         case PacketIds.PACKET_ENTER_WORLD:
-          await this.handleEnterWorld(bytes);
-          break;
+          await this.handleEnterWorld(data, bytes);
+          return;
         case PacketIds.PACKET_PING:
           this.handlePing();
-          break;
+          return;
         case PacketIds.PACKET_BLEND:
           await this.handleBlend(bytes);
-          break;
+          return;
         // omitted entity update handler
       }
-      parent.send?.({
-        type: "durable.packet",
-        from: "durable-connection",
-        to: "session",
-        payload: {
-          data,
-          sessionId: this.options.sessionId,
-        },
-      } satisfies IpcMessage);
+      this.publishDurablePacket(data);
     } catch (error) {
       // Server packets are isolated so a client-side decode failure cannot close the socket.
       logger.warn("Failed to process server packet", {
@@ -185,7 +177,7 @@ export class DurableConnection {
     this.publishStatus("waiting-enter-world");
   }
 
-  private async handleEnterWorld(bytes: Uint8Array): Promise<void> {
+  private async handleEnterWorld(data: ArrayBuffer, bytes: Uint8Array): Promise<void> {
     if (this.status !== "waiting-enter-world") return;
 
     const packet = this.codec.decode(bytes) as EnterWorldData;
@@ -193,6 +185,8 @@ export class DurableConnection {
       this.fail("Server is full");
       return;
     }
+
+    this.publishDurablePacket(data);
 
     const extra = await this.solver.enterWorld2();
     this.sendRaw(PacketIds.PACKET_ENTER_WORLD2, extra);
@@ -330,6 +324,18 @@ export class DurableConnection {
         ping: this.ping,
 
         error,
+      },
+    } satisfies IpcMessage);
+  }
+
+  private publishDurablePacket(data: ArrayBuffer): void {
+    parent.send?.({
+      type: "durable.packet",
+      from: "durable-connection",
+      to: "session",
+      payload: {
+        data,
+        sessionId: this.options.sessionId,
       },
     } satisfies IpcMessage);
   }

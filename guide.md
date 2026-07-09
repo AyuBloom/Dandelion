@@ -45,9 +45,9 @@ curl --fail-with-body --silent --show-error "$BASE_URL/get-sessions"
 
 A new installation returns `[]`.
 
-> **Important:** stop every active session through the API before stopping or
-> restarting Dandelion. Sessions are detached child processes, and the current
-> API does not recover their management connection after an API restart.
+> **Important:** stop active sessions through the API when you are done with
+> them. If only the API process is restarted, Dandelion reattaches live detached
+> session processes from the local session registry.
 
 ## 3. Create a session
 
@@ -278,9 +278,10 @@ A successful request returns HTTP `202` with `{"ok":true}`. This means the
 graceful stop signal was accepted. Confirm the session disappears from
 `GET /get-sessions` before stopping the Dandelion API.
 
-Do not delete files from `.sessions/` or `.session-auth/` to stop a session.
-Those directories contain internal health and password-hash state, not process
-controls.
+Do not delete files from `.sessions/`, `.session-auth/`, or
+`.session-control/` to stop a session. Those directories contain internal
+health, password-hash, and local reattachment state; use the API to stop
+sessions.
 
 ## Troubleshooting
 

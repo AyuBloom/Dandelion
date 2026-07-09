@@ -1,14 +1,23 @@
 import { mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import type { Subprocess } from "bun";
+import type { Socket, Subprocess, UnixSocketListener } from "bun";
 
 import { PacketIds } from "../network/enums.ts";
 import { ServerCodec } from "../network/server-codec.ts";
 import { getErrorMessage } from "../shared/errors.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
-import { logger } from "../shared/logger.ts";
+import { feedback, logger } from "../shared/logger.ts";
 import type { SessionId } from "../shared/ids.ts";
+import {
+  getSessionControlPath,
+  readSessionControlFrames,
+  SESSION_CONTROL_DIRECTORY,
+  type SessionControlFrame,
+  type SessionControlSignal,
+  type SessionControlSocketData,
+  writeSessionControlFrame,
+} from "../shared/session-control.ts";
 import type {
   ClientRpcData,
   EntityData,
@@ -56,6 +65,7 @@ const parent = process as typeof process & {
 export class Session {
   private readonly health: SessionHealth;
   private durableConnection?: Subprocess;
+  private controlServer?: UnixSocketListener<SessionControlSocketData>;
   private clientCodec: MiniCodec;
   private serverCodec: ServerCodec;
   private enterWorld?: EnterWorldData;
@@ -68,6 +78,7 @@ export class Session {
   private healthWrites = Promise.resolve();
   private pskSent = false;
   private readonly port: number;
+  private readonly controlClients = new Set<Socket<SessionControlSocketData>>();
 
   constructor(private readonly options: SessionOptions) {
     const createdAt = new Date().toISOString();
@@ -90,12 +101,13 @@ export class Session {
   }
 
   async start(): Promise<number> {
+    await this.startControlServer();
     await this.writeHealth();
 
     this.durableConnection = this.startDurableConnection();
     process.on("message", this.handleEngineIPC);
-    process.on("SIGINT", this.shutdown);
-    process.on("SIGTERM", this.shutdown);
+    process.on("SIGINT", () => this.shutdown("SIGINT"));
+    process.on("SIGTERM", () => this.shutdown("SIGTERM"));
 
     const exitCode = await this.durableConnection.exited;
 
@@ -105,7 +117,7 @@ export class Session {
     await this.healthWrites;
     await this.removeHealth();
 
-    parent.send?.({
+    this.sendToEngine({
       type: "session.ended",
       from: "session",
       to: "engine",
@@ -114,13 +126,58 @@ export class Session {
         status: this.health.status,
       },
     } satisfies IpcMessage);
+    await this.stopControlServer();
 
-    logger.info("Session process stopped", {
+    logger.info(feedback.sessionStopped, {
       sessionId: this.health.sessionId,
+      sessionName: this.health.sessionName,
+      status: this.health.status,
       exitCode,
     });
 
     return exitCode;
+  }
+
+  private async startControlServer(): Promise<void> {
+    await mkdir(SESSION_CONTROL_DIRECTORY, { recursive: true });
+    await rm(this.controlPath(), { force: true });
+
+    this.controlServer = Bun.listen<SessionControlSocketData>({
+      unix: this.controlPath(),
+      socket: {
+        open: (socket) => {
+          for (const client of this.controlClients) {
+            client.end();
+          }
+          this.controlClients.clear();
+
+          socket.data = { buffer: "" };
+          this.controlClients.add(socket);
+          this.sendControlIpc(socket, {
+            type: "session.health",
+            from: "session",
+            to: "engine",
+            payload: this.health,
+          } satisfies IpcMessage);
+        },
+        data: (socket, data) => {
+          socket.data.buffer = readSessionControlFrames(
+            socket.data.buffer,
+            data,
+            (frame) => this.handleControlFrame(frame),
+          );
+        },
+        close: (socket) => {
+          this.controlClients.delete(socket);
+        },
+        error: (socket, error) => {
+          this.controlClients.delete(socket);
+          logger.warn("Session control socket error", {
+            error: getErrorMessage(error),
+          });
+        },
+      },
+    });
   }
 
   private startDurableConnection(): Subprocess {
@@ -150,9 +207,22 @@ export class Session {
     });
   }
 
-  private readonly shutdown = () => {
-    this.durableConnection?.kill("SIGTERM");
+  private readonly shutdown = (signal: SessionControlSignal = "SIGTERM") => {
+    this.durableConnection?.kill(signal);
   };
+
+  private handleControlFrame(frame: SessionControlFrame): void {
+    switch (frame.type) {
+      case "ipc":
+        this.handleEngineIPC(frame.message);
+        break;
+      case "terminate":
+        this.shutdown(frame.signal);
+        break;
+      default:
+        break;
+    }
+  }
 
   private readonly handleDurableIPC = (message: IpcMessage): void => {
     if (message.from !== "durable-connection") return;
@@ -289,14 +359,18 @@ export class Session {
 
   private forwardDurablePacket(data: ArrayBuffer): void {
     const opcode = new Uint8Array(data)[0] as number | undefined;
-    if (opcode === PacketIds.PACKET_PING || opcode === PacketIds.PACKET_BLEND) {
+    if (
+      opcode === PacketIds.PACKET_PRE_ENTER_WORLD ||
+      opcode === PacketIds.PACKET_PING ||
+      opcode === PacketIds.PACKET_BLEND
+    ) {
       return;
     }
 
     const entityTick = readEntityTick(data);
     this.recordDurablePacket(data);
 
-    parent.send?.({
+    this.sendToEngine({
       type: "durable.packet",
       from: "session",
       to: "engine",
@@ -310,6 +384,8 @@ export class Session {
 
   private recordDurablePacket(data: ArrayBuffer): void {
     const opcode = new Uint8Array(data)[0] as PacketIds | undefined;
+    if (!isSyncRecordableOpcode(opcode)) return;
+
     try {
       const decoded = this.clientCodec.decode(data);
       switch (opcode) {
@@ -427,7 +503,7 @@ export class Session {
     const syncData = this.synthesizeSyncPackets();
 
     if (!syncData) {
-      parent.send?.({
+      this.sendToEngine({
         type: "session.sync.unavailable",
         from: "session",
         to: "engine",
@@ -440,7 +516,7 @@ export class Session {
       return;
     }
 
-    parent.send?.({
+    this.sendToEngine({
       type: "session.sync",
       from: "session",
       to: "engine",
@@ -526,7 +602,7 @@ export class Session {
       JSON.stringify(health, null, 2),
     );
 
-    parent.send?.({
+    this.sendToEngine({
       type: "session.health",
       from: "session",
       to: "engine",
@@ -536,6 +612,43 @@ export class Session {
 
   private async removeHealth(): Promise<void> {
     await rm(`.sessions/${this.health.sessionId}.json`, { force: true });
+  }
+
+  private controlPath(): string {
+    return getSessionControlPath(this.health.sessionId);
+  }
+
+  private sendToEngine(message: IpcMessage): void {
+    try {
+      parent.send?.(message);
+    } catch {
+      // Parent IPC disappears when the engine is restarted; the control socket
+      // keeps live sessions manageable without disturbing the durable socket.
+    }
+
+    for (const client of [...this.controlClients]) {
+      this.sendControlIpc(client, message);
+    }
+  }
+
+  private sendControlIpc(
+    socket: Socket<SessionControlSocketData>,
+    message: IpcMessage,
+  ): void {
+    if (writeSessionControlFrame(socket, { type: "ipc", message })) return;
+
+    this.controlClients.delete(socket);
+    socket.end();
+  }
+
+  private async stopControlServer(): Promise<void> {
+    for (const client of this.controlClients) {
+      client.end();
+    }
+    this.controlClients.clear();
+    this.controlServer?.stop(true);
+    this.controlServer = undefined;
+    await rm(this.controlPath(), { force: true });
   }
 }
 
@@ -552,4 +665,12 @@ export function readEntityTick(packet: ArrayBuffer): number | undefined {
   }
 
   return new DataView(packet).getUint32(1, true);
+}
+
+function isSyncRecordableOpcode(opcode: PacketIds | undefined): boolean {
+  return (
+    opcode === PacketIds.PACKET_ENTER_WORLD ||
+    opcode === PacketIds.PACKET_ENTITY_UPDATE ||
+    opcode === PacketIds.PACKET_RPC
+  );
 }

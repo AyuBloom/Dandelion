@@ -1,6 +1,18 @@
 const RESET = "\x1b[0m";
 
 type ConsoleMethod = "debug" | "error" | "info" | "log" | "warn";
+export const DEBUG_LEVELS = ["debug", "info", "warn", "error", "silent"] as const;
+export type DebugLevel = (typeof DEBUG_LEVELS)[number];
+
+export const parseDebugLevel = (value: string | undefined): DebugLevel => {
+  const normalized = value?.trim().toLowerCase();
+  if (DEBUG_LEVELS.includes(normalized as DebugLevel)) {
+    return normalized as DebugLevel;
+  }
+  return "info";
+};
+
+const activeDebugLevel = parseDebugLevel(process.env.DEBUG_LEVEL);
 
 const logColors = {
   debug: "\x1b[38;2;255;154;170m",
@@ -10,9 +22,42 @@ const logColors = {
   warn: "\x1b[38;2;216;23;61m",
 } satisfies Record<ConsoleMethod, string>;
 
+const levelPriority = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+  silent: Number.POSITIVE_INFINITY,
+} satisfies Record<DebugLevel, number>;
+
+const methodLevel = {
+  debug: "debug",
+  error: "error",
+  info: "info",
+  log: "info",
+  warn: "warn",
+} satisfies Record<ConsoleMethod, Exclude<DebugLevel, "silent">>;
+
+const shouldWriteLog = (method: ConsoleMethod) =>
+  levelPriority[methodLevel[method]] >= levelPriority[activeDebugLevel];
+
 const writeLog = (method: ConsoleMethod, values: unknown[]) => {
+  if (!shouldWriteLog(method)) return;
   console[method](`${logColors[method]}[${method}]${RESET}`, ...values);
 };
+
+export const feedback = {
+  existingSessionReattached:
+    "(^o^)/ Dandelion found an existing session and reattached it.",
+  listenerAttached: "(o^ ^o) A listener attached and is syncing gently.",
+  listenerDetached: "(u_u) A listener detached. Waving bye-bye.",
+  sessionSaverStarted:
+    "(o^ ^o) Dandelion is awake. Session Saver is listening.",
+  sessionSaverForceStopping:
+    "(>_<) Dandelion is being force-stopped. Tucking things in now.",
+  sessionStarted: "(*^ ^*) A session sprouted and is being kept cozy.",
+  sessionStopped: "(u_u) Session stopped and got tucked in safely.",
+} as const;
 
 export const logger = {
   debug: (...values: unknown[]) => writeLog("debug", values),

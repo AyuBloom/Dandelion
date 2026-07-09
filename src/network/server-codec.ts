@@ -337,7 +337,7 @@ function writeParameterValue(
       writeInt64(buffer, assertSafeInteger(value, parameter.name));
       break;
     default:
-      assertNever(parameter.type);
+      throw new DandelionError("SERVER_CODEC_ERROR", `Unsupported parameter type: ${parameter.type}`);
   }
 }
 
@@ -541,12 +541,10 @@ function writeVector2(
   value: EntityAttributeValue,
   context: string,
 ): void {
-  if (!isVector2(value)) {
-    throw new DandelionError("SERVER_CODEC_ERROR", `Expected Vector2 for ${context}`);
-  }
+  const vector = assertVector2(value, context);
 
-  buffer.writeInt32(toFixedHundredths(value.x, `${context}.x`));
-  buffer.writeInt32(toFixedHundredths(value.y, `${context}.y`));
+  buffer.writeInt32(toFixedHundredths(vector.x, `${context}.x`));
+  buffer.writeInt32(toFixedHundredths(vector.y, `${context}.y`));
 }
 
 function writeVector2Array(
@@ -554,13 +552,15 @@ function writeVector2Array(
   value: EntityAttributeValue,
   context: string,
 ): void {
-  if (!Array.isArray(value) || !value.every(isVector2)) {
+  if (!Array.isArray(value)) {
     throw new DandelionError("SERVER_CODEC_ERROR", `Expected Vector2[] for ${context}`);
   }
+  const vectors = value.map((vector) => assertVector2(vector, context, "Vector2[]"));
 
-  buffer.writeInt32(value.length);
-  for (const vector of value) {
-    writeVector2(buffer, vector, context);
+  buffer.writeInt32(vectors.length);
+  for (const vector of vectors) {
+    buffer.writeInt32(toFixedHundredths(vector.x, `${context}.x`));
+    buffer.writeInt32(toFixedHundredths(vector.y, `${context}.y`));
   }
 }
 
@@ -660,20 +660,25 @@ function assertNumber(value: EntityAttributeValue, context: string): number {
   return value;
 }
 
-function isVector2(value: EntityAttributeValue): value is Vector2 {
-  return (
+function assertVector2(
+  value: unknown,
+  context: string,
+  expectedType = "Vector2",
+): Vector2 {
+  const vector = value as Partial<Vector2>;
+  if (
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    typeof value.x === "number" &&
-    typeof value.y === "number"
-  );
+    typeof vector.x === "number" &&
+    typeof vector.y === "number"
+  ) {
+    return vector as Vector2;
+  }
+
+  throw new DandelionError("SERVER_CODEC_ERROR", `Expected ${expectedType} for ${context}`);
 }
 
 function hasOwn(object: EntityData, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(object, key);
-}
-
-function assertNever(value: never): never {
-  throw new DandelionError("SERVER_CODEC_ERROR", `Unsupported parameter type: ${value}`);
 }

@@ -94,7 +94,7 @@ const main = async () => {
   await solver.init();
   const service = new SolverService(solver);
 
-  logger.info("Solver worker ready", { ipAddress, pid: process.pid });
+  logger.debug("Solver worker ready", { ipAddress, pid: process.pid });
   parent.send?.({ type: "solver.ready", pid: process.pid });
 
   process.on("message", (message: SolverRequest) => {

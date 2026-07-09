@@ -28,18 +28,22 @@ export function parseListenerInput(
     if (buffer.readUint8() !== PacketIds.PACKET_INPUT) return undefined;
 
     const input: unknown = JSON.parse(buffer.readVString());
-    if (buffer.remaining() !== 0 || !isInputPacketData(input)) return undefined;
-    return input;
+    if (buffer.remaining() !== 0) return undefined;
+    return parseInputPacketData(input);
   } catch {
     return undefined;
   }
 }
 
-function isInputPacketData(value: unknown): value is InputPacketData {
-  if (!isRecord(value)) return false;
+function parseInputPacketData(value: unknown): InputPacketData | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
 
-  const entries = Object.entries(value);
-  if (entries.length === 0) return false;
+  const input = value as Record<string, unknown>;
+
+  const entries = Object.entries(input);
+  if (entries.length === 0) return undefined;
 
   let hasAction = false;
   let hasMouseAction = false;
@@ -50,18 +54,18 @@ function isInputPacketData(value: unknown): value is InputPacketData {
       typeof inputValue !== "number" ||
       !Number.isFinite(inputValue)
     ) {
-      return false;
+      return undefined;
     }
 
     if (toggleFields.has(field)) {
-      if (inputValue !== 0 && inputValue !== 1) return false;
+      if (inputValue !== 0 && inputValue !== 1) return undefined;
       hasAction = true;
       continue;
     }
 
     if (yawFields.has(field)) {
       if (!Number.isInteger(inputValue) || inputValue < 0 || inputValue > 359) {
-        return false;
+        return undefined;
       }
       hasAction = true;
       hasMouseAction = true;
@@ -69,7 +73,7 @@ function isInputPacketData(value: unknown): value is InputPacketData {
     }
 
     if (field === "mouseUp") {
-      if (inputValue !== 1) return false;
+      if (inputValue !== 1) return undefined;
       hasAction = true;
       hasMouseAction = true;
       continue;
@@ -79,15 +83,15 @@ function isInputPacketData(value: unknown): value is InputPacketData {
       (field === "worldX" || field === "worldY") &&
       !Number.isInteger(inputValue)
     ) {
-      return false;
+      return undefined;
     }
-    if (field === "distance" && inputValue < 0) return false;
+    if (field === "distance" && inputValue < 0) return undefined;
   }
 
-  const positionCount = [...positionFields].filter((field) => field in value).length;
-  return hasAction && positionCount === (hasMouseAction ? positionFields.size : 0);
-}
+  const positionCount = [...positionFields].filter((field) => field in input).length;
+  if (!hasAction || positionCount !== (hasMouseAction ? positionFields.size : 0)) {
+    return undefined;
+  }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return input as InputPacketData;
 }

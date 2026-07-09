@@ -7,7 +7,7 @@ import {
   rm,
 } from "node:fs/promises";
 
-import type { Subprocess } from "bun";
+import type { Socket, Subprocess } from "bun";
 import { Elysia, t } from "elysia";
 import type { ElysiaWS } from "elysia/ws";
 
@@ -19,7 +19,13 @@ import { MAX_RPC_PACKET_BYTES } from "../session/rpc.ts";
 import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
-import { logger } from "../shared/logger.ts";
+import { feedback, logger } from "../shared/logger.ts";
+import {
+  getSessionControlPath,
+  readSessionControlFrames,
+  type SessionControlSocketData,
+  writeSessionControlFrame,
+} from "../shared/session-control.ts";
 import {
   matchesGameServerAddress,
   parseGameServerAddress,
@@ -75,6 +81,13 @@ interface Listener {
 interface SessionsCache {
   data: SessionHealth[];
   lastReadAt: number;
+}
+
+interface SessionProcess {
+  pid?: number;
+  send(message: IpcMessage): void;
+  kill?(signal: NodeJS.Signals): void;
+  close?(): void;
 }
 
 const MAX_LISTENER_PACKET_BYTES = 1024;
@@ -253,7 +266,7 @@ export class Engine {
   private readonly listenersBySession = new Map<SessionId, Set<ListenerId>>();
   private readonly listeners = new Map<ListenerId, Listener>();
   private readonly sessionByListener = new Map<ListenerId, SessionId>();
-  private readonly sessions = new Map<SessionId, Subprocess>();
+  private readonly sessions = new Map<SessionId, SessionProcess>();
   private readonly sessionIdByPid = new Map<number, SessionId>();
   private readonly passwordHashes = new Map<SessionId, string>();
   private readonly authTokens = new Map<string, AuthToken>();
@@ -268,6 +281,9 @@ export class Engine {
 
   listen(port: number | string): void {
     this.app.listen(port);
+    void this.getSessions().catch((error) => {
+      logger.warn("Failed to attach existing sessions", { error });
+    });
   }
 
   private async getSessions(): Promise<SessionHealth[]> {
@@ -275,6 +291,7 @@ export class Engine {
     const cacheAge = now - this.sessionsCache.lastReadAt;
 
     if (cacheAge <= SESSIONS_CACHE_TTL_MS) {
+      await this.reattachSessions(this.sessionsCache.data);
       return this.sessionsCache.data;
     }
 
@@ -289,13 +306,13 @@ export class Engine {
     await Promise.all(
       data.map(({ sessionId }) => this.loadPasswordHash(sessionId)),
     );
-
     this.sessionsCache = {
       data,
       lastReadAt: now,
     };
 
-    return data;
+    await this.reattachSessions(data);
+    return this.sessionsCache.data;
   }
 
   private async createSession(body: {
@@ -355,6 +372,11 @@ export class Engine {
       });
       this.sessionIdByPid.set(child.pid, sessionId);
       void child.exited.then(() => this.handleSessionExit(child));
+      logger.info(feedback.sessionStarted, {
+        sessionId,
+        sessionName: body.sessionName,
+        serverId: gameServer.id,
+      });
       return { ok: true, sessionId };
     } catch (error) {
       this.passwordHashes.delete(sessionId);
@@ -364,10 +386,7 @@ export class Engine {
     }
   }
 
-  private handleSessionIPC(
-    message: IpcMessage,
-    child?: Subprocess,
-  ): void {
+  private handleSessionIPC(message: IpcMessage, child?: SessionProcess): void {
     if (message.from !== "session") return;
 
     switch (message.type) {
@@ -381,7 +400,9 @@ export class Engine {
         }
         if (child) {
           this.sessions.set(message.payload.sessionId, child);
-          this.sessionIdByPid.set(child.pid, message.payload.sessionId);
+          if (child.pid !== undefined) {
+            this.sessionIdByPid.set(child.pid, message.payload.sessionId);
+          }
         }
         if (!this.listenersBySession.has(message.payload.sessionId)) {
           this.listenersBySession.set(message.payload.sessionId, new Set());
@@ -579,6 +600,10 @@ export class Engine {
         queue: [],
       },
     });
+    logger.info(feedback.listenerAttached, {
+      listenerId: ws.id,
+      sessionId,
+    });
   }
 
   private handleListenerMessage(ws: ElysiaWS, message: Uint8Array): void {
@@ -688,6 +713,7 @@ export class Engine {
   }
 
   private removeListener(listenerId: ListenerId): void {
+    const listener = this.listeners.get(listenerId);
     const sessionId = this.sessionByListener.get(listenerId);
     if (sessionId) {
       this.listenersBySession.get(sessionId)?.delete(listenerId);
@@ -703,11 +729,19 @@ export class Engine {
 
     this.sessionByListener.delete(listenerId);
     this.listeners.delete(listenerId);
+    if (listener) {
+      logger.info(feedback.listenerDetached, {
+        listenerId,
+        sessionId: listener.sessionId,
+      });
+    }
   }
 
   private removeSession(sessionId: SessionId): void {
     const child = this.sessions.get(sessionId);
-    if (child) this.sessionIdByPid.delete(child.pid);
+    this.sessions.delete(sessionId);
+    child?.close?.();
+    if (child?.pid !== undefined) this.sessionIdByPid.delete(child.pid);
     for (const [pid, mappedSessionId] of this.sessionIdByPid) {
       if (mappedSessionId === sessionId) this.sessionIdByPid.delete(pid);
     }
@@ -721,7 +755,6 @@ export class Engine {
       }
     }
 
-    this.sessions.delete(sessionId);
     this.listenersBySession.delete(sessionId);
     this.passwordHashes.delete(sessionId);
     for (const key of this.authFailures.keys()) {
@@ -755,6 +788,10 @@ export class Engine {
     password: string,
     clientIdentity: string,
   ): Promise<AuthResult> {
+    if (!this.sessions.has(sessionId)) {
+      await this.getSessions();
+    }
+
     const passwordHash =
       this.passwordHashes.get(sessionId) ??
       (await this.loadPasswordHash(sessionId));
@@ -819,6 +856,10 @@ export class Engine {
     sessionId: SessionId,
     token?: string,
   ): Promise<StopSessionResult> {
+    if (!this.sessions.has(sessionId)) {
+      await this.getSessions();
+    }
+
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { ok: false, code: "not_found", error: "Session not found" };
@@ -828,6 +869,13 @@ export class Engine {
     }
 
     try {
+      if (!session.kill) {
+        return {
+          ok: false,
+          code: "stop_failed",
+          error: "Session stop failed",
+        };
+      }
       session.kill("SIGTERM");
       return { ok: true };
     } catch (error) {
@@ -908,9 +956,112 @@ export class Engine {
       return true;
     } catch (error) {
       logger.warn(`Failed to send IPC to session ${sessionId}`, { error });
-      this.removeSession(sessionId);
+      this.detachSession(sessionId);
       return false;
     }
+  }
+
+  private async reattachSessions(sessions: SessionHealth[]): Promise<void> {
+    await Promise.all(
+      sessions.map(async (session) => {
+        if (
+          this.sessions.has(session.sessionId) ||
+          session.status === "closed" ||
+          session.status === "failed"
+        ) {
+          return;
+        }
+
+        await this.reattachSession(session.sessionId);
+      }),
+    );
+  }
+
+  private async reattachSession(sessionId: SessionId): Promise<void> {
+    let socket: Socket<SessionControlSocketData> | undefined;
+    const handle: SessionProcess = {
+      send: (message) => {
+        if (
+          !socket ||
+          !writeSessionControlFrame(socket, { type: "ipc", message })
+        ) {
+          throw new Error("Session control socket is closed");
+        }
+      },
+      kill: (signal) => {
+        const controlSignal = signal === "SIGINT" ? "SIGINT" : "SIGTERM";
+        if (
+          !socket ||
+          !writeSessionControlFrame(socket, {
+            type: "terminate",
+            signal: controlSignal,
+          })
+        ) {
+          throw new Error("Session control socket is closed");
+        }
+      },
+      close: () => {
+        socket?.end();
+        socket = undefined;
+      },
+    };
+
+    try {
+      socket = await Bun.connect<SessionControlSocketData>({
+        unix: getSessionControlPath(sessionId),
+        data: { buffer: "" },
+        socket: {
+          data: (connectedSocket, data) => {
+            connectedSocket.data.buffer = readSessionControlFrames(
+              connectedSocket.data.buffer,
+              data,
+              (frame) => {
+                if (frame.type === "ipc") {
+                  this.handleSessionIPC(frame.message, handle);
+                }
+              },
+            );
+          },
+          close: () => {
+            if (this.sessions.get(sessionId) === handle) {
+              this.detachSession(sessionId);
+            }
+          },
+          error: (_, error) => {
+            logger.warn(`Session control socket failed for ${sessionId}`, {
+              error,
+            });
+          },
+        },
+      });
+
+      this.sessions.set(sessionId, handle);
+      if (!this.listenersBySession.has(sessionId)) {
+        this.listenersBySession.set(sessionId, new Set());
+      }
+      logger.info(feedback.existingSessionReattached, { sessionId });
+    } catch (error) {
+      logger.warn(`Failed to attach existing session ${sessionId}`, { error });
+    }
+  }
+
+  private detachSession(sessionId: SessionId): void {
+    const session = this.sessions.get(sessionId);
+    this.sessions.delete(sessionId);
+    session?.close?.();
+
+    const listenerIds = this.listenersBySession.get(sessionId);
+    if (listenerIds) {
+      for (const listenerId of [...listenerIds]) {
+        const listener = this.listeners.get(listenerId);
+        this.removeListener(listenerId);
+        listener?.ws.close(1011);
+      }
+    }
+
+    this.listenersBySession.delete(sessionId);
+    this.scheduledInputs.delete(sessionId);
+    this.controllerBySession.delete(sessionId);
   }
 }
 
