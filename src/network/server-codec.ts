@@ -247,7 +247,6 @@ export class ServerCodec {
         throw new DandelionError("SERVER_CODEC_ERROR", `Entity type is not in attribute map: ${entityType}`);
       }
 
-      assertEntityHasAllAttributes(entity, attributeMap);
       entities.set(uid, entity);
     }
 
@@ -463,19 +462,6 @@ function createEmptyUidTable(
   }
 
   return sortedUidsByType;
-}
-
-function assertEntityHasAllAttributes(
-  entity: EntityData,
-  attributeMap: AttributeMapEntry[],
-): void {
-  for (const attribute of attributeMap) {
-    if (!hasOwn(entity, attribute.name)) {
-      throw new DandelionError("SERVER_CODEC_ERROR", 
-        `Missing fresh entity ${entity.uid} attribute: ${attribute.name}`,
-      );
-    }
-  }
 }
 
 function getKnownEntityTypes(state: ServerCodecState): Map<number, number> {

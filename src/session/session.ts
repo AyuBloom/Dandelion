@@ -75,6 +75,7 @@ export class Session {
   private readonly singleRpcPackets: Partial<Record<SingleSyncRpcName, ArrayBuffer>> = {};
   private readonly chatPackets: ArrayBuffer[] = [];
   private readonly localBuildingsByUid = new Map<number, RpcObject>();
+  private readonly localItemsByName = new Map<string, RpcObject>();
   private healthWrites = Promise.resolve();
   private pskSent = false;
   private readonly port: number;
@@ -478,6 +479,11 @@ export class Session {
       return;
     }
 
+    if (packet.name === "LocalItem") {
+      this.recordLocalItems(packet.response);
+      return;
+    }
+
     if (singleSyncRpcNames.includes(packet.name as SingleSyncRpcName)) {
       this.singleRpcPackets[packet.name as SingleSyncRpcName] = clonePacket(data);
     }
@@ -496,6 +502,22 @@ export class Session {
       }
 
       this.localBuildingsByUid.set(uid, { ...building });
+    }
+  }
+
+  private recordLocalItems(response: RpcData["response"]): void {
+    const items = Array.isArray(response) ? response : [response];
+
+    for (const item of items) {
+      const itemName = item.itemName;
+      if (typeof itemName !== "string") continue;
+
+      if (item.stacks === 0) {
+        this.localItemsByName.delete(itemName);
+        continue;
+      }
+
+      this.localItemsByName.set(itemName, { ...item });
     }
   }
 
@@ -566,9 +588,19 @@ export class Session {
       if (packet) packets.push(clonePacket(packet));
     }
 
+    packets.push(...this.synthesizeLocalItemPackets());
     packets.push(...this.synthesizeLocalBuildingPackets());
     packets.push(...this.chatPackets.map(clonePacket));
     return packets;
+  }
+
+  private synthesizeLocalItemPackets(): ArrayBuffer[] {
+    return [...this.localItemsByName.values()].map((item) =>
+      this.serverCodec.encodeRpc({
+        name: "LocalItem",
+        response: item,
+      }),
+    );
   }
 
   private synthesizeLocalBuildingPackets(): ArrayBuffer[] {

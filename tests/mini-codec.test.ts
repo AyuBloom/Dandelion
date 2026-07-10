@@ -49,6 +49,32 @@ test("mini codec keeps entity UID tables in sorted typed arrays", () => {
   expect(client.sortedUidsByType[1]).toBe(unchangedUidTable);
 });
 
+test("fresh entity updates preserve sparse entity attributes", () => {
+  const server = new ServerCodec({
+    attributeMaps: {
+      1: [
+        { name: "health", type: AttributeType.Uint32 },
+        { name: "wave", type: AttributeType.Uint32 },
+      ],
+    },
+    entityTypeNames: {
+      1: "Player",
+    },
+  });
+  const client = new MiniCodec();
+
+  client.decode(server.encodeEnterWorldResponse(enterWorldData()));
+  const update = client.decode(server.encodeFreshEntityUpdate({
+    tick: 1,
+    entities: [entity(5, 10)],
+  }));
+
+  expect("entities" in update ? update.entities.get(5) : undefined).toEqual({
+    uid: 5,
+    health: 10,
+  });
+});
+
 function entity(uid: number, health: number): EntityData {
   return {
     uid,

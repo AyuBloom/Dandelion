@@ -3,6 +3,8 @@ import { mkdir, rm } from "node:fs/promises";
 
 import { PacketIds } from "../src/network/enums.ts";
 import MiniCodec from "../src/network/mini-codec.ts";
+import { parseListenerInput } from "../src/session/input.ts";
+import type { InputPacketData } from "../src/shared/packets.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../src/shared/ipc.ts";
 import { Engine } from "../src/engine/engine.ts";
 import {
@@ -17,7 +19,7 @@ interface TestListener {
   id: string;
   sessionId: string;
   ws: {
-    send: (packet: ArrayBuffer) => void;
+    sendBinary: (packet: ArrayBuffer) => void;
     close?: (code: number) => void;
   };
   syncState: {
@@ -43,7 +45,7 @@ interface EngineTestHarness {
   authTokens: Map<string, { sessionId: string; expiresAt: number }>;
   scheduledInputs: Map<
     string,
-    { listenerId: string; packet: Uint8Array }
+    { listenerId: string; input: InputPacketData }
   >;
   controllerBySession: Map<string, string>;
   handleListenerMessage(
@@ -134,6 +136,53 @@ test("entity update ticks flush the latest scheduled listener inputs", () => {
   expect(sent).toHaveLength(1);
 });
 
+test("direction changes from one listener merge within an entity tick", () => {
+  const engine = new Engine() as unknown as EngineTestHarness;
+  const sent: IpcMessage[] = [];
+  const sessionId = "session";
+  const listenerId = "listener";
+  const codec = new MiniCodec();
+
+  engine.sessions.set(sessionId, { send: (message) => sent.push(message as IpcMessage) });
+  engine.listenersBySession.set(sessionId, new Set([listenerId]));
+  engine.listeners.set(listenerId, listener(listenerId, sessionId));
+
+  engine.handleListenerMessage(
+    { id: listenerId },
+    new Uint8Array(
+      codec.encode(PacketIds.PACKET_INPUT, { up: 1, down: 0 }),
+    ),
+  );
+  engine.handleListenerMessage(
+    { id: listenerId },
+    new Uint8Array(
+      codec.encode(PacketIds.PACKET_INPUT, { left: 1, right: 0 }),
+    ),
+  );
+  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
+
+  engine.handleListenerMessage(
+    { id: listenerId },
+    new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { up: 0 })),
+  );
+  engine.handleListenerMessage(
+    { id: listenerId },
+    new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { left: 0 })),
+  );
+  engine.forwardDurablePacket(sessionId, entityPacket(2), 2);
+
+  expect(
+    sent.map((message) =>
+      message.type === "engine.input"
+        ? parseListenerInput(message.payload)
+        : undefined,
+    ),
+  ).toEqual([
+    { up: 1, down: 0, left: 1, right: 0 },
+    { up: 0, left: 0 },
+  ]);
+});
+
 test("non-entity packets do not flush scheduled inputs", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: unknown[] = [];
@@ -153,7 +202,7 @@ test("non-entity packets do not flush scheduled inputs", () => {
   expect(sent).toEqual([]);
   expect(engine.scheduledInputs.get(sessionId)).toEqual({
     listenerId,
-    packet: input,
+    input: { up: 1 },
   });
 });
 
@@ -239,7 +288,7 @@ test("only the latest input controller can forward RPCs", () => {
   ]);
 });
 
-test("Elysia passes binary WebSocket frames into the packet handler", async () => {
+test("Elysia accepts and returns binary WebSocket frames", async () => {
   const realEngine = new Engine();
   const engine = realEngine as unknown as EngineTestHarness;
   const sessionId = crypto.randomUUID();
@@ -254,6 +303,7 @@ test("Elysia passes binary WebSocket frames into the packet handler", async () =
   const socket = new WebSocket(
     `ws://127.0.0.1:${realEngine.app.server!.port}/sessions/${sessionId}`,
   );
+  socket.binaryType = "arraybuffer";
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -274,6 +324,33 @@ test("Elysia passes binary WebSocket frames into the packet handler", async () =
       to: "session",
       payload: { sessionId },
     });
+
+    const enterWorldPacket = packet(PacketIds.PACKET_ENTER_WORLD, 1);
+    const received = new Promise<ArrayBuffer>((resolve, reject) => {
+      socket.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) resolve(event.data);
+        else {
+          reject(
+            new Error(`Expected binary frame, received ${typeof event.data}`),
+          );
+        }
+      };
+    });
+    engine.handleSessionSync(
+      sessionId,
+      (message as Extract<IpcMessage, { type: "engine.sync" }>).payload.listenerId,
+      {
+        snapshotTick: 1,
+        enterWorldPacket,
+        rpcPackets: [],
+        freshEntityUpdatePacket: entityPacket(1),
+      },
+    );
+
+    expect([...new Uint8Array(await received)]).toEqual([
+      PacketIds.PACKET_ENTER_WORLD,
+      1,
+    ]);
   } finally {
     socket.close();
     await realEngine.app.stop(true);
@@ -543,7 +620,7 @@ test("sync sends the snapshot before queued entity updates", () => {
   const listener: TestListener = {
     id: listenerId,
     sessionId,
-    ws: { send: (packet) => sent.push(packet) },
+    ws: { sendBinary: (packet) => sent.push(packet) },
     syncState: { status: "syncing", queue: [] },
   };
 
@@ -610,7 +687,7 @@ function listener(id: string, sessionId: string): TestListener {
   return {
     id,
     sessionId,
-    ws: { send: () => {} },
+    ws: { sendBinary: () => {} },
     syncState: { status: "live", queue: [] },
   };
 }

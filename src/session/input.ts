@@ -7,6 +7,8 @@ const MAX_INPUT_PACKET_BYTES = 1024;
 const toggleFields = new Set(["up", "down", "left", "right", "space"]);
 const yawFields = new Set(["mouseDown", "mouseMoved", "mouseMovedWhileDown"]);
 const positionFields = new Set(["worldX", "worldY", "distance"]);
+const mouseActionFields = new Set([...yawFields, "mouseUp"]);
+const mouseFields = new Set([...mouseActionFields, ...positionFields]);
 const allowedFields = new Set([
   ...toggleFields,
   ...yawFields,
@@ -33,6 +35,21 @@ export function parseListenerInput(
   } catch {
     return undefined;
   }
+}
+
+export function mergeListenerInputs(
+  previous: InputPacketData,
+  next: InputPacketData,
+): InputPacketData {
+  const merged = { ...previous };
+
+  if ([...mouseActionFields].some((field) => field in next)) {
+    for (const field of mouseFields) {
+      delete merged[field as keyof InputPacketData];
+    }
+  }
+
+  return Object.assign(merged, next);
 }
 
 function parseInputPacketData(value: unknown): InputPacketData | undefined {

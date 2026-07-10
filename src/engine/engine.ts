@@ -12,14 +12,19 @@ import { Elysia, t } from "elysia";
 import type { ElysiaWS } from "elysia/ws";
 
 import { PacketIds } from "../network/enums.ts";
+import MiniCodec from "../network/mini-codec.ts";
 import { ServerCodec } from "../network/server-codec.ts";
 import { AvailablePlugins } from "../plugins/plugins.ts";
-import { parseListenerInput } from "../session/input.ts";
+import {
+  mergeListenerInputs,
+  parseListenerInput,
+} from "../session/input.ts";
 import { MAX_RPC_PACKET_BYTES } from "../session/rpc.ts";
 import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
 import { feedback, logger } from "../shared/logger.ts";
+import type { InputPacketData } from "../shared/packets.ts";
 import {
   getSessionControlPath,
   readSessionControlFrames,
@@ -44,7 +49,7 @@ interface QueuedEntityUpdate {
 
 interface ScheduledInput {
   listenerId: ListenerId;
-  packet: Uint8Array;
+  input: InputPacketData;
 }
 
 interface AuthToken {
@@ -274,6 +279,7 @@ export class Engine {
   private readonly scheduledInputs = new Map<SessionId, ScheduledInput>();
   private readonly controllerBySession = new Map<SessionId, ListenerId>();
   private readonly codec = new ServerCodec();
+  private readonly listenerCodec = new MiniCodec();
   private sessionsCache: SessionsCache = {
     data: [],
     lastReadAt: 0,
@@ -477,7 +483,7 @@ export class Engine {
           continue;
         }
 
-        listener.ws.send(data);
+        listener.ws.sendBinary(data);
         if (isEntityUpdate && entityTick !== undefined) {
           listener.syncState.snapshotTick = entityTick;
         }
@@ -510,7 +516,9 @@ export class Engine {
       type: "engine.input",
       from: "engine",
       to: "session",
-      payload: scheduled.packet,
+      payload: new Uint8Array(
+        this.listenerCodec.encode(PacketIds.PACKET_INPUT, scheduled.input),
+      ),
     } satisfies IpcMessage);
   }
 
@@ -530,15 +538,15 @@ export class Engine {
 
     listener.syncState.snapshotTick = syncData.snapshotTick;
 
-    listener.ws.send(syncData.enterWorldPacket);
+    listener.ws.sendBinary(syncData.enterWorldPacket);
     for (const packet of syncData.rpcPackets) {
-      listener.ws.send(packet);
+      listener.ws.sendBinary(packet);
     }
-    listener.ws.send(syncData.freshEntityUpdatePacket);
+    listener.ws.sendBinary(syncData.freshEntityUpdatePacket);
 
     for (const packet of listener.syncState.queue) {
       if (packet.tick > syncData.snapshotTick) {
-        listener.ws.send(packet.data);
+        listener.ws.sendBinary(packet.data);
         listener.syncState.snapshotTick = packet.tick;
       }
     }
@@ -643,17 +651,22 @@ export class Engine {
 
   private handleInput(ws: ElysiaWS, message: Uint8Array): void {
     const listener = this.listeners.get(ws.id);
+    const input = parseListenerInput(message);
     if (
       !listener ||
       listener.syncState.status !== "live" ||
-      !parseListenerInput(message)
+      !input
     ) {
       return;
     }
 
+    const scheduled = this.scheduledInputs.get(listener.sessionId);
     this.scheduledInputs.set(listener.sessionId, {
       listenerId: listener.id,
-      packet: message.slice(),
+      input:
+        scheduled?.listenerId === listener.id
+          ? mergeListenerInputs(scheduled.input, input)
+          : input,
     });
     this.controllerBySession.set(listener.sessionId, listener.id);
   }
@@ -686,7 +699,7 @@ export class Engine {
   }
 
   private handlePing(ws: ElysiaWS): void {
-    ws.send(this.codec.encodePing());
+    ws.sendBinary(this.codec.encodePing());
   }
 
   private handleRpc(ws: ElysiaWS, message: Uint8Array): void {

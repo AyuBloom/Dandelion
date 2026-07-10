@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import MiniCodec from "../src/network/mini-codec.ts";
+import { ServerCodec } from "../src/network/server-codec.ts";
 import { PacketIds, ParameterType } from "../src/network/enums.ts";
 import type {
   DurableConnectionStatus,
@@ -22,11 +23,14 @@ interface SessionTestHarness {
   };
   durableConnection?: { send: (message: unknown) => void };
   clientCodec: MiniCodec;
+  serverCodec: ServerCodec;
   enterWorld?: EnterWorldData;
   latestTick?: number;
   singleRpcPackets: Record<string, ArrayBuffer>;
   chatPackets: ArrayBuffer[];
+  localItemsByName: Map<string, Record<string, number | string>>;
   synthesizeSyncPackets(): SyncData | undefined;
+  synthesizeRpcPackets(): ArrayBuffer[];
   handleEngineIPC(message: IpcMessage): void;
   forwardDurablePacket(data: ArrayBuffer): void;
   recordRpcPacket(packet: RpcData, data: ArrayBuffer): void;
@@ -197,6 +201,60 @@ test("session caps chat history at 500 messages", () => {
 
   expect(session.chatPackets).toHaveLength(500);
   expect(new Uint8Array(session.chatPackets[0]!)[0]).toBe(1);
+});
+
+test("session sync reconstructs the current player inventory", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const localItemRpc: RpcMapEntry = {
+    name: "LocalItem",
+    parameters: [
+      { name: "itemName", type: ParameterType.String },
+      { name: "tier", type: ParameterType.Uint32 },
+      { name: "stacks", type: ParameterType.Uint32 },
+    ],
+    isArray: false,
+    index: 0,
+  };
+  session.serverCodec.state.rpcMaps = [localItemRpc];
+
+  session.recordRpcPacket(
+    {
+      name: "LocalItem",
+      response: { itemName: "Pickaxe", tier: 2, stacks: 1 },
+    },
+    packet(1),
+  );
+  session.recordRpcPacket(
+    {
+      name: "LocalItem",
+      response: { itemName: "HealthPotion", tier: 1, stacks: 3 },
+    },
+    packet(2),
+  );
+  session.recordRpcPacket(
+    {
+      name: "LocalItem",
+      response: { itemName: "HealthPotion", tier: 1, stacks: 0 },
+    },
+    packet(3),
+  );
+
+  const decoder = new MiniCodec();
+  configureRpc(decoder, localItemRpc);
+  expect(
+    session.synthesizeRpcPackets().map((rpc) => decoder.decode(rpc)),
+  ).toEqual([
+    {
+      opcode: PacketIds.PACKET_RPC,
+      name: "LocalItem",
+      response: { itemName: "Pickaxe", tier: 2, stacks: 1 },
+    },
+  ]);
+  expect(session.localItemsByName.has("HealthPotion")).toBeFalse();
 });
 
 test("entity ticks are read without decoding the entity payload", () => {
