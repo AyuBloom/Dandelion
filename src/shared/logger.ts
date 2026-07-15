@@ -13,6 +13,8 @@ export const parseDebugLevel = (value: string | undefined): DebugLevel => {
 };
 
 const activeDebugLevel = parseDebugLevel(process.env.DEBUG_LEVEL);
+const discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL?.trim();
+let discordDelivery = Promise.resolve();
 
 const logColors = {
   debug: "\x1b[38;2;255;154;170m",
@@ -41,9 +43,39 @@ const methodLevel = {
 const shouldWriteLog = (method: ConsoleMethod) =>
   levelPriority[methodLevel[method]] >= levelPriority[activeDebugLevel];
 
+const formatLogValue = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.stack ?? value.message;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const forwardLog = (method: ConsoleMethod, values: unknown[]) => {
+  if (!discordWebhookUrl) return;
+
+  const content = `[${method}] ${values.map(formatLogValue).join(" ")}`.slice(0, 2000);
+  discordDelivery = discordDelivery
+    .then(async () => {
+      const response = await fetch(discordWebhookUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+      });
+      if (!response.ok) {
+        console.error(`Discord webhook rejected a log message (${response.status})`);
+      }
+    })
+    .catch((error) => console.error("Discord webhook delivery failed", error));
+};
+
 const writeLog = (method: ConsoleMethod, values: unknown[]) => {
   if (!shouldWriteLog(method)) return;
   console[method](`${logColors[method]}[${method}]${RESET}`, ...values);
+  forwardLog(method, values);
 };
 
 export const feedback = {

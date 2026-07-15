@@ -12,18 +12,13 @@ import { Elysia, t } from "elysia";
 import type { ElysiaWS } from "elysia/ws";
 
 import { PacketIds } from "../network/enums.ts";
-import MiniCodec from "../network/mini-codec.ts";
 import { ServerCodec } from "../network/server-codec.ts";
 import { AvailablePlugins } from "../plugins/plugins.ts";
-import {
-  mergeListenerInputs,
-  parseListenerInput,
-} from "../session/input.ts";
+import { parseListenerInput } from "../session/input.ts";
 import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
 import { feedback, logger } from "../shared/logger.ts";
-import type { InputPacketData } from "../shared/packets.ts";
 import {
   getSessionControlPath,
   readSessionControlFrames,
@@ -44,11 +39,6 @@ interface SyncState {
 interface QueuedEntityUpdate {
   tick: number;
   data: ArrayBuffer;
-}
-
-interface ScheduledInput {
-  listenerId: ListenerId;
-  input: InputPacketData;
 }
 
 interface AuthToken {
@@ -275,9 +265,7 @@ export class Engine {
   private readonly passwordHashes = new Map<SessionId, string>();
   private readonly authTokens = new Map<string, AuthToken>();
   private readonly authFailures = new Map<string, AuthFailures>();
-  private readonly scheduledInputs = new Map<SessionId, ScheduledInput>();
   private readonly codec = new ServerCodec();
-  private readonly listenerCodec = new MiniCodec();
   private sessionsCache: SessionsCache = {
     data: [],
     lastReadAt: 0,
@@ -463,10 +451,6 @@ export class Engine {
     if (!listenerIds) return;
 
     const isEntityUpdate = new Uint8Array(data)[0] === PacketIds.PACKET_ENTITY_UPDATE;
-    if (isEntityUpdate && entityTick !== undefined) {
-      this.processScheduledInput(sessionId);
-    }
-
     for (const listenerId of listenerIds) {
       const listener = this.listeners.get(listenerId);
       if (!listener) continue;
@@ -498,26 +482,6 @@ export class Engine {
         listener.syncState.queue.push({ tick: entityTick, data });
       }
     }
-  }
-
-  private processScheduledInput(sessionId: SessionId): void {
-    const scheduled = this.scheduledInputs.get(sessionId);
-    if (!scheduled) return;
-
-    this.scheduledInputs.delete(sessionId);
-    const listener = this.listeners.get(scheduled.listenerId);
-    if (!listener || listener.syncState.status !== "live") {
-      return;
-    }
-
-    this.sendToSession(sessionId, {
-      type: "engine.input",
-      from: "engine",
-      to: "session",
-      payload: new Uint8Array(
-        this.listenerCodec.encode(PacketIds.PACKET_INPUT, scheduled.input),
-      ),
-    } satisfies IpcMessage);
   }
 
   private handleSessionSync(
@@ -658,14 +622,12 @@ export class Engine {
       return;
     }
 
-    const scheduled = this.scheduledInputs.get(listener.sessionId);
-    this.scheduledInputs.set(listener.sessionId, {
-      listenerId: listener.id,
-      input:
-        scheduled?.listenerId === listener.id
-          ? mergeListenerInputs(scheduled.input, input)
-          : input,
-    });
+    this.sendToSession(listener.sessionId, {
+      type: "engine.input",
+      from: "engine",
+      to: "session",
+      payload: message,
+    } satisfies IpcMessage);
   }
 
   private handleEnterWorld(ws: ElysiaWS): void {
@@ -725,11 +687,6 @@ export class Engine {
     const sessionId = this.sessionByListener.get(listenerId);
     if (sessionId) {
       this.listenersBySession.get(sessionId)?.delete(listenerId);
-
-      const scheduled = this.scheduledInputs.get(sessionId);
-      if (scheduled?.listenerId === listenerId) {
-        this.scheduledInputs.delete(sessionId);
-      }
     }
 
     this.sessionByListener.delete(listenerId);
@@ -768,7 +725,6 @@ export class Engine {
     for (const [token, auth] of this.authTokens) {
       if (auth.sessionId === sessionId) this.authTokens.delete(token);
     }
-    this.scheduledInputs.delete(sessionId);
     this.sessionsCache = {
       data: this.sessionsCache.data.filter(
         (session) => session.sessionId !== sessionId,
@@ -1064,7 +1020,6 @@ export class Engine {
     }
 
     this.listenersBySession.delete(sessionId);
-    this.scheduledInputs.delete(sessionId);
   }
 }
 

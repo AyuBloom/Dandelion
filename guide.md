@@ -240,10 +240,10 @@ Listener packet rules:
 
 | Opcode | Packet | Behavior |
 | --- | --- | --- |
-| `3` | Input | Accepted after snapshot sync; validated before forwarding |
+| `3` | Input | Accepted after snapshot sync; validated and forwarded immediately |
 | `4` | Enter world | Requests the initial snapshot once |
 | `7` | Ping | Replied to by Dandelion |
-| `9` | RPC | Accepted from the current controller, up to 256 bytes |
+| `9` | RPC | Accepted after snapshot sync, up to 256 bytes |
 | `6`, `10` | Entry/blend compatibility packets | Ignored without disconnecting |
 | Any other opcode | Unsupported | Listener is closed with code `1008` |
 
@@ -252,9 +252,8 @@ frames larger than 1024 bytes are rejected. The 256-byte RPC limit mirrors the
 ZOMBS.io disconnection constraint documented by the
 [zombs.io Wiki](https://ayubloom.github.io/zombsWiki/gameplay/scripts/fundamentals/dc_triggers.html).
 
-Multiple listeners may watch the same public session. The most recent live
-listener to send a valid input packet becomes the controller; only that listener
-can forward RPCs. Use one controlling client at a time to avoid contention.
+Multiple listeners may watch and control the same public session. Valid input
+and RPC packets from every live listener are forwarded immediately.
 
 ## 7. Stop a session safely
 

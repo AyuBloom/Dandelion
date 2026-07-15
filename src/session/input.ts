@@ -5,13 +5,6 @@ import type { InputPacketData } from "../shared/packets.ts";
 
 const MAX_INPUT_PACKET_BYTES = 1024;
 const yawFields = new Set(["mouseDown", "mouseMoved", "mouseMovedWhileDown"]);
-const mouseActionFields = new Set([...yawFields, "mouseUp"]);
-const mouseFields = new Set([
-  ...mouseActionFields,
-  "worldX",
-  "worldY",
-  "distance",
-]);
 const allowedFields = new Set([
   "respawn",
   "up",
@@ -45,21 +38,6 @@ export function parseListenerInput(
   } catch {
     return undefined;
   }
-}
-
-export function mergeListenerInputs(
-  previous: InputPacketData,
-  next: InputPacketData,
-): InputPacketData {
-  const merged = { ...previous };
-
-  if ([...mouseActionFields].some((field) => field in next)) {
-    for (const field of mouseFields) {
-      delete merged[field as keyof InputPacketData];
-    }
-  }
-
-  return Object.assign(merged, next);
 }
 
 function parseInputPacketData(value: unknown): InputPacketData | undefined {

@@ -4,7 +4,6 @@ import { mkdir, rm } from "node:fs/promises";
 import { PacketIds } from "../src/network/enums.ts";
 import MiniCodec from "../src/network/mini-codec.ts";
 import { parseListenerInput } from "../src/session/input.ts";
-import type { InputPacketData } from "../src/shared/packets.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../src/shared/ipc.ts";
 import { Engine } from "../src/engine/engine.ts";
 import {
@@ -43,10 +42,6 @@ interface EngineTestHarness {
   >;
   passwordHashes: Map<string, string>;
   authTokens: Map<string, { sessionId: string; expiresAt: number }>;
-  scheduledInputs: Map<
-    string,
-    { listenerId: string; input: InputPacketData }
-  >;
   handleListenerMessage(
     ws: { id: string; close?: (code: number) => void },
     message: Uint8Array,
@@ -93,35 +88,33 @@ interface EngineTestHarness {
   sendToSession(sessionId: string, message: IpcMessage): boolean;
 }
 
-test("entity update ticks flush the latest scheduled listener inputs", () => {
+test("valid listener inputs are forwarded immediately", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
-  const sent: unknown[] = [];
+  const sent: IpcMessage[] = [];
   const sessionId = "session";
-  const firstListenerId = "listener-1";
-  const secondListenerId = "listener-2";
+  const listenerId = "listener";
   const codec = new MiniCodec();
-  const firstInput = new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { left: 1 }));
-  const latestFirstInput = new Uint8Array(
-    codec.encode(PacketIds.PACKET_INPUT, { left: 0 }),
+  const firstInput = new Uint8Array(
+    codec.encode(PacketIds.PACKET_INPUT, { up: 1 }),
   );
   const secondInput = new Uint8Array(
-    codec.encode(PacketIds.PACKET_INPUT, { right: 1 }),
+    codec.encode(PacketIds.PACKET_INPUT, { left: 1 }),
   );
 
-  engine.sessions.set(sessionId, { send: (message) => sent.push(message) });
-  engine.listenersBySession.set(
-    sessionId,
-    new Set([firstListenerId, secondListenerId]),
-  );
-  engine.listeners.set(firstListenerId, listener(firstListenerId, sessionId));
-  engine.listeners.set(secondListenerId, listener(secondListenerId, sessionId));
-  engine.handleListenerMessage({ id: firstListenerId }, firstInput);
-  engine.handleListenerMessage({ id: firstListenerId }, latestFirstInput);
-  engine.handleListenerMessage({ id: secondListenerId }, secondInput);
-
-  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
+  engine.sessions.set(sessionId, {
+    send: (message) => sent.push(message as IpcMessage),
+  });
+  engine.listeners.set(listenerId, listener(listenerId, sessionId));
+  engine.handleListenerMessage({ id: listenerId }, firstInput);
+  engine.handleListenerMessage({ id: listenerId }, secondInput);
 
   expect(sent).toEqual([
+    {
+      type: "engine.input",
+      from: "engine",
+      to: "session",
+      payload: firstInput,
+    },
     {
       type: "engine.input",
       from: "engine",
@@ -129,146 +122,42 @@ test("entity update ticks flush the latest scheduled listener inputs", () => {
       payload: secondInput,
     },
   ]);
-  expect(engine.scheduledInputs.size).toBe(0);
-
-  engine.forwardDurablePacket(sessionId, entityPacket(2), 2);
-  expect(sent).toHaveLength(1);
 });
 
-test("direction changes from one listener merge within an entity tick", () => {
+test("inputs from every live listener are forwarded", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: IpcMessage[] = [];
   const sessionId = "session";
-  const listenerId = "listener";
+  const firstListenerId = "listener-1";
+  const secondListenerId = "listener-2";
   const codec = new MiniCodec();
-
-  engine.sessions.set(sessionId, { send: (message) => sent.push(message as IpcMessage) });
-  engine.listenersBySession.set(sessionId, new Set([listenerId]));
-  engine.listeners.set(listenerId, listener(listenerId, sessionId));
-
-  engine.handleListenerMessage(
-    { id: listenerId },
-    new Uint8Array(
-      codec.encode(PacketIds.PACKET_INPUT, { up: 1, down: 0 }),
-    ),
+  const firstInput = new Uint8Array(
+    codec.encode(PacketIds.PACKET_INPUT, { left: 1 }),
   );
-  engine.handleListenerMessage(
-    { id: listenerId },
-    new Uint8Array(
-      codec.encode(PacketIds.PACKET_INPUT, { left: 1, right: 0 }),
-    ),
+  const secondInput = new Uint8Array(
+    codec.encode(PacketIds.PACKET_INPUT, { right: 1 }),
   );
-  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
 
-  engine.handleListenerMessage(
-    { id: listenerId },
-    new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { up: 0 })),
-  );
-  engine.handleListenerMessage(
-    { id: listenerId },
-    new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { left: 0 })),
-  );
-  engine.forwardDurablePacket(sessionId, entityPacket(2), 2);
+  engine.sessions.set(sessionId, {
+    send: (message) => sent.push(message as IpcMessage),
+  });
+  engine.listeners.set(firstListenerId, listener(firstListenerId, sessionId));
+  engine.listeners.set(secondListenerId, listener(secondListenerId, sessionId));
 
-  expect(
-    sent.map((message) =>
-      message.type === "engine.input"
-        ? parseListenerInput(message.payload)
-        : undefined,
-    ),
-  ).toEqual([
-    { up: 1, down: 0, left: 1, right: 0 },
-    { up: 0, left: 0 },
-  ]);
+  engine.handleListenerMessage({ id: firstListenerId }, firstInput);
+  engine.handleListenerMessage({ id: secondListenerId }, secondInput);
+
+  expect(sent.map((message) => message.payload)).toEqual([firstInput, secondInput]);
 });
 
-test("mouse actions merge with movement and space within an entity tick", () => {
-  const engine = new Engine() as unknown as EngineTestHarness;
-  const sent: IpcMessage[] = [];
-  const sessionId = "session";
-  const listenerId = "listener";
-  const codec = new MiniCodec();
-
-  engine.sessions.set(sessionId, { send: (message) => sent.push(message as IpcMessage) });
-  engine.listenersBySession.set(sessionId, new Set([listenerId]));
-  engine.listeners.set(listenerId, listener(listenerId, sessionId));
-
-  for (const input of [
-    { up: 1, down: 0 },
-    {
-      mouseMovedWhileDown: 90,
-      worldX: 100,
-      worldY: 200,
-      distance: 50,
-    },
-    { space: 1 },
-  ]) {
-    engine.handleListenerMessage(
-      { id: listenerId },
-      new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, input)),
-    );
-  }
-  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
-
-  expect(sent).toHaveLength(1);
-  expect(
-    sent[0]?.type === "engine.input"
-      ? parseListenerInput(sent[0].payload)
-      : undefined,
-  ).toEqual({
-    up: 1,
-    down: 0,
-    mouseMovedWhileDown: 90,
-    worldX: 100,
-    worldY: 200,
-    distance: 50,
-    space: 1,
-  });
-
-  for (const input of [{ left: 1 }, { mouseMovedWhileDown: 0 }, { space: 0 }]) {
-    engine.handleListenerMessage(
-      { id: listenerId },
-      new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, input)),
-    );
-  }
-  engine.forwardDurablePacket(sessionId, entityPacket(2), 2);
-
-  expect(sent[1]?.type === "engine.input" ? parseListenerInput(sent[1].payload) : undefined).toEqual({
-    left: 1,
-    mouseMovedWhileDown: 0,
-    space: 0,
-  });
-});
-
-test("non-entity packets do not flush scheduled inputs", () => {
+test("waiting listeners cannot forward inputs", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: unknown[] = [];
   const sessionId = "session";
   const listenerId = "listener";
-  const input = new Uint8Array(
-    new MiniCodec().encode(PacketIds.PACKET_INPUT, { up: 1 }),
-  );
-
-  engine.sessions.set(sessionId, { send: (message) => sent.push(message) });
-  engine.listenersBySession.set(sessionId, new Set([listenerId]));
-  engine.listeners.set(listenerId, listener(listenerId, sessionId));
-  engine.handleListenerMessage({ id: listenerId }, input);
-
-  engine.forwardDurablePacket(sessionId, packet(PacketIds.PACKET_RPC), 1);
-
-  expect(sent).toEqual([]);
-  expect(engine.scheduledInputs.get(sessionId)).toEqual({
-    listenerId,
-    input: { up: 1 },
-  });
-});
-
-test("waiting listeners cannot schedule inputs", () => {
-  const engine = new Engine() as unknown as EngineTestHarness;
-  const sessionId = "session";
-  const listenerId = "listener";
   const waiting = listener(listenerId, sessionId);
   waiting.syncState.status = "waiting";
+  engine.sessions.set(sessionId, { send: (message) => sent.push(message) });
   engine.listeners.set(listenerId, waiting);
 
   const input = new Uint8Array(
@@ -276,7 +165,7 @@ test("waiting listeners cannot schedule inputs", () => {
   );
   engine.handleListenerMessage({ id: listenerId }, input);
 
-  expect(engine.scheduledInputs.size).toBe(0);
+  expect(sent).toEqual([]);
 });
 
 test("listeners remain connected when compatibility opcodes are discarded", () => {
@@ -326,11 +215,8 @@ test("every live listener can forward RPCs", () => {
   engine.listeners.set(secondListenerId, listener(secondListenerId, sessionId));
 
   const rpc = Uint8Array.of(PacketIds.PACKET_RPC, 0, 0, 0, 0);
-  const oversizedRpc = new Uint8Array(257);
-  oversizedRpc[0] = PacketIds.PACKET_RPC;
   engine.handleListenerMessage({ id: firstListenerId }, rpc);
   engine.handleListenerMessage({ id: secondListenerId }, rpc);
-  engine.handleListenerMessage({ id: firstListenerId }, oversizedRpc);
 
   expect(sent).toEqual([
     {
@@ -345,16 +231,10 @@ test("every live listener can forward RPCs", () => {
       to: "session",
       payload: rpc,
     },
-    {
-      type: "engine.rpc",
-      from: "engine",
-      to: "session",
-      payload: oversizedRpc,
-    },
   ]);
 });
 
-test("a live listener forwards respawn input on the next entity tick", () => {
+test("a live listener forwards respawn input immediately", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: IpcMessage[] = [];
   const sessionId = "session";
@@ -370,7 +250,6 @@ test("a live listener forwards respawn input on the next entity tick", () => {
   engine.listeners.set(listenerId, listener(listenerId, sessionId));
 
   engine.handleListenerMessage({ id: listenerId }, respawn);
-  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
 
   expect(sent).toHaveLength(1);
   expect(
