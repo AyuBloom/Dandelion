@@ -47,7 +47,6 @@ interface EngineTestHarness {
     string,
     { listenerId: string; input: InputPacketData }
   >;
-  controllerBySession: Map<string, string>;
   handleListenerMessage(
     ws: { id: string; close?: (code: number) => void },
     message: Uint8Array,
@@ -183,6 +182,64 @@ test("direction changes from one listener merge within an entity tick", () => {
   ]);
 });
 
+test("mouse actions merge with movement and space within an entity tick", () => {
+  const engine = new Engine() as unknown as EngineTestHarness;
+  const sent: IpcMessage[] = [];
+  const sessionId = "session";
+  const listenerId = "listener";
+  const codec = new MiniCodec();
+
+  engine.sessions.set(sessionId, { send: (message) => sent.push(message as IpcMessage) });
+  engine.listenersBySession.set(sessionId, new Set([listenerId]));
+  engine.listeners.set(listenerId, listener(listenerId, sessionId));
+
+  for (const input of [
+    { up: 1, down: 0 },
+    {
+      mouseMovedWhileDown: 90,
+      worldX: 100,
+      worldY: 200,
+      distance: 50,
+    },
+    { space: 1 },
+  ]) {
+    engine.handleListenerMessage(
+      { id: listenerId },
+      new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, input)),
+    );
+  }
+  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
+
+  expect(sent).toHaveLength(1);
+  expect(
+    sent[0]?.type === "engine.input"
+      ? parseListenerInput(sent[0].payload)
+      : undefined,
+  ).toEqual({
+    up: 1,
+    down: 0,
+    mouseMovedWhileDown: 90,
+    worldX: 100,
+    worldY: 200,
+    distance: 50,
+    space: 1,
+  });
+
+  for (const input of [{ left: 1 }, { mouseMovedWhileDown: 0 }, { space: 0 }]) {
+    engine.handleListenerMessage(
+      { id: listenerId },
+      new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, input)),
+    );
+  }
+  engine.forwardDurablePacket(sessionId, entityPacket(2), 2);
+
+  expect(sent[1]?.type === "engine.input" ? parseListenerInput(sent[1].payload) : undefined).toEqual({
+    left: 1,
+    mouseMovedWhileDown: 0,
+    space: 0,
+  });
+});
+
 test("non-entity packets do not flush scheduled inputs", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: unknown[] = [];
@@ -220,7 +277,6 @@ test("waiting listeners cannot schedule inputs", () => {
   engine.handleListenerMessage({ id: listenerId }, input);
 
   expect(engine.scheduledInputs.size).toBe(0);
-  expect(engine.controllerBySession.size).toBe(0);
 });
 
 test("listeners remain connected when compatibility opcodes are discarded", () => {
@@ -259,7 +315,7 @@ test("listeners are closed for other opcodes outside the public allowlist", () =
   expect(engine.listeners.has(listenerId)).toBeFalse();
 });
 
-test("only the latest input controller can forward RPCs", () => {
+test("every live listener can forward RPCs", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sent: unknown[] = [];
   const sessionId = "session";
@@ -269,14 +325,12 @@ test("only the latest input controller can forward RPCs", () => {
   engine.listeners.set(firstListenerId, listener(firstListenerId, sessionId));
   engine.listeners.set(secondListenerId, listener(secondListenerId, sessionId));
 
-  const input = new Uint8Array(
-    new MiniCodec().encode(PacketIds.PACKET_INPUT, { up: 1 }),
-  );
-  engine.handleListenerMessage({ id: secondListenerId }, input);
-
   const rpc = Uint8Array.of(PacketIds.PACKET_RPC, 0, 0, 0, 0);
+  const oversizedRpc = new Uint8Array(257);
+  oversizedRpc[0] = PacketIds.PACKET_RPC;
   engine.handleListenerMessage({ id: firstListenerId }, rpc);
   engine.handleListenerMessage({ id: secondListenerId }, rpc);
+  engine.handleListenerMessage({ id: firstListenerId }, oversizedRpc);
 
   expect(sent).toEqual([
     {
@@ -285,7 +339,45 @@ test("only the latest input controller can forward RPCs", () => {
       to: "session",
       payload: rpc,
     },
+    {
+      type: "engine.rpc",
+      from: "engine",
+      to: "session",
+      payload: rpc,
+    },
+    {
+      type: "engine.rpc",
+      from: "engine",
+      to: "session",
+      payload: oversizedRpc,
+    },
   ]);
+});
+
+test("a live listener forwards respawn input on the next entity tick", () => {
+  const engine = new Engine() as unknown as EngineTestHarness;
+  const sent: IpcMessage[] = [];
+  const sessionId = "session";
+  const listenerId = "listener";
+  const respawn = new Uint8Array(
+    new MiniCodec().encode(PacketIds.PACKET_INPUT, { respawn: 1 }),
+  );
+
+  engine.sessions.set(sessionId, {
+    send: (message) => sent.push(message as IpcMessage),
+  });
+  engine.listenersBySession.set(sessionId, new Set([listenerId]));
+  engine.listeners.set(listenerId, listener(listenerId, sessionId));
+
+  engine.handleListenerMessage({ id: listenerId }, respawn);
+  engine.forwardDurablePacket(sessionId, entityPacket(1), 1);
+
+  expect(sent).toHaveLength(1);
+  expect(
+    sent[0]?.type === "engine.input"
+      ? parseListenerInput(sent[0].payload)
+      : undefined,
+  ).toEqual({ respawn: 1 });
 });
 
 test("Elysia accepts and returns binary WebSocket frames", async () => {

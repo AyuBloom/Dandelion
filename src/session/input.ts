@@ -4,16 +4,26 @@ import { PacketIds } from "../network/enums.ts";
 import type { InputPacketData } from "../shared/packets.ts";
 
 const MAX_INPUT_PACKET_BYTES = 1024;
-const toggleFields = new Set(["up", "down", "left", "right", "space"]);
 const yawFields = new Set(["mouseDown", "mouseMoved", "mouseMovedWhileDown"]);
-const positionFields = new Set(["worldX", "worldY", "distance"]);
 const mouseActionFields = new Set([...yawFields, "mouseUp"]);
-const mouseFields = new Set([...mouseActionFields, ...positionFields]);
+const mouseFields = new Set([
+  ...mouseActionFields,
+  "worldX",
+  "worldY",
+  "distance",
+]);
 const allowedFields = new Set([
-  ...toggleFields,
+  "respawn",
+  "up",
+  "down",
+  "left",
+  "right",
+  "space",
   ...yawFields,
-  "mouseUp", // bool as num
-  ...positionFields,
+  "mouseUp",
+  "worldX",
+  "worldY",
+  "distance",
 ]);
 
 export function parseListenerInput(
@@ -53,61 +63,24 @@ export function mergeListenerInputs(
 }
 
 function parseInputPacketData(value: unknown): InputPacketData | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const input = value as Record<string, unknown>;
-
+  const input = (value ?? {}) as Record<string, unknown>;
   const entries = Object.entries(input);
   if (entries.length === 0) return undefined;
 
-  let hasAction = false;
-  let hasMouseAction = false;
-
   for (const [field, inputValue] of entries) {
-    if (
-      !allowedFields.has(field) ||
-      typeof inputValue !== "number" ||
-      !Number.isFinite(inputValue)
-    ) {
-      return undefined;
-    }
+    if (!allowedFields.has(field)) return undefined;
 
-    if (toggleFields.has(field)) {
-      if (inputValue !== 0 && inputValue !== 1) return undefined;
-      hasAction = true;
-      continue;
-    }
+    if (field === "respawn" && inputValue !== 1) return undefined;
 
     if (yawFields.has(field)) {
-      if (!Number.isInteger(inputValue) || inputValue < 0 || inputValue > 359) {
+      if (
+        typeof inputValue !== "number" ||
+        inputValue < 0 ||
+        inputValue > 359
+      ) {
         return undefined;
       }
-      hasAction = true;
-      hasMouseAction = true;
-      continue;
     }
-
-    if (field === "mouseUp") {
-      if (inputValue !== 1) return undefined;
-      hasAction = true;
-      hasMouseAction = true;
-      continue;
-    }
-
-    if (
-      (field === "worldX" || field === "worldY") &&
-      !Number.isInteger(inputValue)
-    ) {
-      return undefined;
-    }
-    if (field === "distance" && inputValue < 0) return undefined;
-  }
-
-  const positionCount = [...positionFields].filter((field) => field in input).length;
-  if (!hasAction || positionCount !== (hasMouseAction ? positionFields.size : 0)) {
-    return undefined;
   }
 
   return input as InputPacketData;

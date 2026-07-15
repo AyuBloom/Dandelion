@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dandelion Session Saver
 // @namespace    https://github.com/AyuBloom/Dandelion
-// @version      0.1.0
+// @version      0.1.1
 // @description  Manage and attach Dandelion sessions from the ZOMBS.io client.
 // @match        https://zombs.io/*
 // @match        https://www.zombs.io/*
@@ -625,6 +625,7 @@
       serverOptions: makeServerOptions(session),
       password,
       awaitingPassword: false,
+      checkInitialDeath: false,
       everInWorld: false,
       attempt: 0,
     };
@@ -799,9 +800,22 @@
       }
     });
 
+    state.game.ui.on?.("playerTickUpdate", (playerTick) => {
+      const target = state.activeAttachment;
+      if (!target?.checkInitialDeath || network.socket !== target.socket) return;
+      target.checkInitialDeath = false;
+      if (playerTick?.dead !== 1) return;
+
+      network.emitter?.emit("PACKET_RPC", {
+        name: "Dead",
+        response: { stashDied: 0 },
+      });
+    });
+
     network.addEnterWorldHandler((data) => {
       const target = state.activeAttachment;
       if (!target || network.socket !== target.socket || !data?.allowed) return;
+      target.checkInitialDeath = true;
       target.everInWorld = true;
       target.awaitingPassword = false;
       target.retryDelay = 1000;

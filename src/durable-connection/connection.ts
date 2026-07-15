@@ -100,12 +100,7 @@ export class DurableConnection {
           this.sendPacket(PacketIds.PACKET_INPUT, message.payload);
           break;
         case "session.rpc":
-          if (
-            message.payload.byteLength <= 256 &&
-            message.payload[0] === PacketIds.PACKET_RPC
-          ) {
-            this.send(message.payload);
-          }
+          this.send(message.payload);
           break;
         default:
           break;

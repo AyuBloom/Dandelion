@@ -96,6 +96,7 @@ export interface BlendRequest {
 }
 
 export interface InputPacketData {
+  respawn?: number;
   up?: number;
   down?: number;
   left?: number;

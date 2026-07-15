@@ -75,6 +75,41 @@ test("fresh entity updates preserve sparse entity attributes", () => {
   });
 });
 
+test("server codec accepts fractional wood, stone, and gold values", () => {
+  const server = new ServerCodec({
+    attributeMaps: {
+      1: [
+        { name: "wood", type: AttributeType.Double },
+        { name: "stone", type: AttributeType.Double },
+        { name: "gold", type: AttributeType.Double },
+      ],
+    },
+    entityTypeNames: {
+      1: "Player",
+    },
+  });
+  const client = new MiniCodec();
+
+  client.decode(server.encodeEnterWorldResponse(enterWorldData()));
+  const update = client.decode(server.encodeFreshEntityUpdate({
+    tick: 1,
+    entities: [{
+      uid: 5,
+      entityType: 1,
+      wood: 10.5,
+      stone: 20.25,
+      gold: 30.75,
+    }],
+  }));
+
+  expect("entities" in update ? update.entities.get(5) : undefined).toEqual({
+    uid: 5,
+    wood: 10.5,
+    stone: 20.25,
+    gold: 30.75,
+  });
+});
+
 function entity(uid: number, health: number): EntityData {
   return {
     uid,

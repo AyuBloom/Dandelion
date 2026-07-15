@@ -19,7 +19,6 @@ import {
   mergeListenerInputs,
   parseListenerInput,
 } from "../session/input.ts";
-import { MAX_RPC_PACKET_BYTES } from "../session/rpc.ts";
 import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../shared/ipc.ts";
@@ -277,7 +276,6 @@ export class Engine {
   private readonly authTokens = new Map<string, AuthToken>();
   private readonly authFailures = new Map<string, AuthFailures>();
   private readonly scheduledInputs = new Map<SessionId, ScheduledInput>();
-  private readonly controllerBySession = new Map<SessionId, ListenerId>();
   private readonly codec = new ServerCodec();
   private readonly listenerCodec = new MiniCodec();
   private sessionsCache: SessionsCache = {
@@ -668,7 +666,6 @@ export class Engine {
           ? mergeListenerInputs(scheduled.input, input)
           : input,
     });
-    this.controllerBySession.set(listener.sessionId, listener.id);
   }
 
   private handleEnterWorld(ws: ElysiaWS): void {
@@ -706,9 +703,7 @@ export class Engine {
     const listener = this.listeners.get(ws.id);
     if (
       !listener ||
-      listener.syncState.status !== "live" ||
-      this.controllerBySession.get(listener.sessionId) !== listener.id ||
-      message.byteLength > MAX_RPC_PACKET_BYTES
+      listener.syncState.status !== "live"
     ) {
       return;
     }
@@ -734,9 +729,6 @@ export class Engine {
       const scheduled = this.scheduledInputs.get(sessionId);
       if (scheduled?.listenerId === listenerId) {
         this.scheduledInputs.delete(sessionId);
-      }
-      if (this.controllerBySession.get(sessionId) === listenerId) {
-        this.controllerBySession.delete(sessionId);
       }
     }
 
@@ -777,7 +769,6 @@ export class Engine {
       if (auth.sessionId === sessionId) this.authTokens.delete(token);
     }
     this.scheduledInputs.delete(sessionId);
-    this.controllerBySession.delete(sessionId);
     this.sessionsCache = {
       data: this.sessionsCache.data.filter(
         (session) => session.sessionId !== sessionId,
@@ -1074,7 +1065,6 @@ export class Engine {
 
     this.listenersBySession.delete(sessionId);
     this.scheduledInputs.delete(sessionId);
-    this.controllerBySession.delete(sessionId);
   }
 }
 

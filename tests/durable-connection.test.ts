@@ -65,7 +65,7 @@ test("durable connection ignores inputs until it is in world", () => {
   expect(sent).toEqual([]);
 });
 
-test("durable connection forwards only bounded RPC packets", () => {
+test("durable connection trusts session RPC validation", () => {
   const connection = Object.create(
     DurableConnection.prototype,
   ) as DurableConnectionTestHarness;
@@ -83,7 +83,11 @@ test("durable connection forwards only bounded RPC packets", () => {
   connection.handleSessionIPC(sessionRpc(new Uint8Array(257)));
   connection.handleSessionIPC(sessionRpc(Uint8Array.of(PacketIds.PACKET_INPUT)));
 
-  expect(sent).toEqual([rpc.buffer]);
+  expect(sent).toEqual([
+    rpc.buffer,
+    new Uint8Array(257).buffer,
+    Uint8Array.of(PacketIds.PACKET_INPUT).buffer,
+  ]);
 });
 
 test("durable connection publishes enter-world before in-world status", async () => {

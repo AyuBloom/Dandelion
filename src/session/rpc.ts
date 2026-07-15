@@ -1,6 +1,4 @@
-import ByteBuffer from "bytebuffer";
-
-import { PacketIds, ParameterType } from "../network/enums.ts";
+import { PacketIds } from "../network/enums.ts";
 import type { RpcMapEntry } from "../shared/packets.ts";
 
 export const MAX_RPC_PACKET_BYTES = 256;
@@ -13,38 +11,10 @@ export function isValidListenerRpc(
     return false;
   }
 
-  try {
-    const buffer = ByteBuffer.wrap(packet);
-    buffer.littleEndian = true;
-
-    if (buffer.readUint8() !== PacketIds.PACKET_RPC) return false;
-
-    const rpc = rpcMaps[buffer.readUint32()];
-    if (!rpc) return false;
-
-    for (const parameter of rpc.parameters) {
-      readParameter(buffer, parameter.type);
-    }
-
-    return buffer.remaining() === 0;
-  } catch {
-    return false;
-  }
-}
-
-function readParameter(buffer: ByteBuffer, type: ParameterType): void {
-  switch (type) {
-    case ParameterType.Uint32:
-      buffer.readUint32();
-      break;
-    case ParameterType.Int32:
-    case ParameterType.Float:
-      buffer.readInt32();
-      break;
-    case ParameterType.String:
-      buffer.readVString();
-      break;
-    default:
-      throw new Error(`Unsupported client RPC parameter type: ${type}`);
-  }
+  const rpcIndex = new DataView(
+    packet.buffer,
+    packet.byteOffset,
+    packet.byteLength,
+  ).getUint32(1, true);
+  return packet[0] === PacketIds.PACKET_RPC && rpcMaps[rpcIndex] !== undefined;
 }

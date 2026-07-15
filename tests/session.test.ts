@@ -28,7 +28,7 @@ interface SessionTestHarness {
   latestTick?: number;
   singleRpcPackets: Record<string, ArrayBuffer>;
   chatPackets: ArrayBuffer[];
-  localItemsByName: Map<string, Record<string, number | string>>;
+  virtualInventory: Map<string, Record<string, number | string>>;
   synthesizeSyncPackets(): SyncData | undefined;
   synthesizeRpcPackets(): ArrayBuffer[];
   handleEngineIPC(message: IpcMessage): void;
@@ -48,7 +48,7 @@ test("session health uses the Engine-provided identity and name", () => {
   expect(session.health.sessionName).toBe("test-session");
 });
 
-test("session validates listener inputs before forwarding them", () => {
+test("session applies the minimal listener input guards", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
@@ -74,16 +74,47 @@ test("session validates listener inputs before forwarding them", () => {
     },
   ]);
 
-  const invalidInput = new Uint8Array(
-    codec.encode(PacketIds.PACKET_INPUT, { up: 2 }),
+  const relaxedInput = new Uint8Array(
+    codec.encode(PacketIds.PACKET_INPUT, {
+      up: 2,
+      mouseUp: 0,
+      worldX: 1.5,
+      distance: -1,
+    }),
   );
-  session.handleEngineIPC(engineInput(invalidInput));
+  session.handleEngineIPC(engineInput(relaxedInput));
+  session.handleEngineIPC(
+    engineInput(
+      new Uint8Array(
+        codec.encode(PacketIds.PACKET_INPUT, { mouseMoved: 180.5 }),
+      ),
+    ),
+  );
+  expect(sent).toHaveLength(3);
+
+  session.handleEngineIPC(
+    engineInput(
+      new Uint8Array(
+        codec.encode(PacketIds.PACKET_INPUT, { unknown: 1 } as never),
+      ),
+    ),
+  );
+  session.handleEngineIPC(
+    engineInput(
+      new Uint8Array(
+        codec.encode(PacketIds.PACKET_INPUT, { mouseMoved: 360 }),
+      ),
+    ),
+  );
+  session.handleEngineIPC(
+    engineInput(new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, {}))),
+  );
   session.handleEngineIPC(engineInput(Uint8Array.of(PacketIds.PACKET_INPUT)));
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(3);
 
   session.health.status = "waiting-enter-world";
   session.handleEngineIPC(engineInput(validInput));
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(3);
 });
 
 test("synthesized sync data carries one consistent snapshot tick", () => {
@@ -115,7 +146,7 @@ test("synthesized sync data carries one consistent snapshot tick", () => {
   ]);
 });
 
-test("session validates listener RPCs against the live schema", () => {
+test("session passes mapped listener RPCs up to 256 bytes", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
@@ -135,6 +166,20 @@ test("session validates listener RPCs against the live schema", () => {
   );
   session.handleEngineIPC(engineRpc(valid));
 
+  const mappedWithUncheckedPayload = Uint8Array.of(
+    PacketIds.PACKET_RPC,
+    0,
+    0,
+    0,
+    0,
+    255,
+  );
+  session.handleEngineIPC(engineRpc(mappedWithUncheckedPayload));
+
+  session.handleEngineIPC(
+    engineRpc(Uint8Array.of(PacketIds.PACKET_RPC, 1, 0, 0, 0)),
+  );
+
   const oversized = new Uint8Array(
     session.clientCodec.encode(PacketIds.PACKET_RPC, {
       name: rpc.name,
@@ -149,6 +194,43 @@ test("session validates listener RPCs against the live schema", () => {
       from: "session",
       to: "durable-connection",
       payload: valid,
+    },
+    {
+      type: "session.rpc",
+      from: "session",
+      to: "durable-connection",
+      payload: mappedWithUncheckedPayload,
+    },
+  ]);
+});
+
+test("session forwards respawn input", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const sent: unknown[] = [];
+  const codec = new MiniCodec();
+  session.health.status = "in-world";
+  session.durableConnection = { send: (message) => sent.push(message) };
+
+  const respawn = new Uint8Array(
+    codec.encode(PacketIds.PACKET_INPUT, { respawn: 1 }),
+  );
+  session.handleEngineIPC(engineInput(respawn));
+  session.handleEngineIPC(
+    engineInput(
+      new Uint8Array(codec.encode(PacketIds.PACKET_INPUT, { respawn: 0 })),
+    ),
+  );
+
+  expect(sent).toEqual([
+    {
+      type: "session.input",
+      from: "session",
+      to: "durable-connection",
+      payload: { respawn: 1 },
     },
   ]);
 });
@@ -203,14 +285,14 @@ test("session caps chat history at 500 messages", () => {
   expect(new Uint8Array(session.chatPackets[0]!)[0]).toBe(1);
 });
 
-test("session sync reconstructs the current player inventory", () => {
+test("session sync reconstructs the current player inventory from SetItem", () => {
   const session = new Session({
     sessionId: "session",
     sessionName: "test",
     ...serverAddress(),
   }) as unknown as SessionTestHarness;
-  const localItemRpc: RpcMapEntry = {
-    name: "LocalItem",
+  const setItemRpc: RpcMapEntry = {
+    name: "SetItem",
     parameters: [
       { name: "itemName", type: ParameterType.String },
       { name: "tier", type: ParameterType.Uint32 },
@@ -219,42 +301,42 @@ test("session sync reconstructs the current player inventory", () => {
     isArray: false,
     index: 0,
   };
-  session.serverCodec.state.rpcMaps = [localItemRpc];
+  session.serverCodec.state.rpcMaps = [setItemRpc];
 
   session.recordRpcPacket(
     {
-      name: "LocalItem",
+      name: "SetItem",
       response: { itemName: "Pickaxe", tier: 2, stacks: 1 },
     },
     packet(1),
   );
   session.recordRpcPacket(
     {
-      name: "LocalItem",
+      name: "SetItem",
       response: { itemName: "HealthPotion", tier: 1, stacks: 3 },
     },
     packet(2),
   );
   session.recordRpcPacket(
     {
-      name: "LocalItem",
+      name: "SetItem",
       response: { itemName: "HealthPotion", tier: 1, stacks: 0 },
     },
     packet(3),
   );
 
   const decoder = new MiniCodec();
-  configureRpc(decoder, localItemRpc);
+  configureRpc(decoder, setItemRpc);
   expect(
     session.synthesizeRpcPackets().map((rpc) => decoder.decode(rpc)),
   ).toEqual([
     {
       opcode: PacketIds.PACKET_RPC,
-      name: "LocalItem",
+      name: "SetItem",
       response: { itemName: "Pickaxe", tier: 2, stacks: 1 },
     },
   ]);
-  expect(session.localItemsByName.has("HealthPotion")).toBeFalse();
+  expect(session.virtualInventory.has("HealthPotion")).toBeFalse();
 });
 
 test("entity ticks are read without decoding the entity payload", () => {
