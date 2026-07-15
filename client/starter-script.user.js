@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dandelion Session Saver
 // @namespace    https://github.com/AyuBloom/Dandelion
-// @version      0.1.1
+// @version      0.1.2
 // @description  Manage and attach Dandelion sessions from the ZOMBS.io client.
 // @match        https://zombs.io/*
 // @match        https://www.zombs.io/*
@@ -54,72 +54,83 @@
       :host, *, *::before, *::after { box-sizing: border-box; }
       button, input, select { font: inherit; letter-spacing: 0; }
       button { cursor: pointer; }
-      button:disabled { cursor: default; opacity: .45; }
-      .launcher, .panel, dialog { pointer-events: auto; font-family: "Trebuchet MS", Arial, sans-serif; color: #f6f7f8; }
+      button:disabled { cursor: not-allowed; opacity: .4; }
+      .launcher, .panel, dialog {
+        pointer-events: auto; color: #eee; font: 13px "Open Sans", sans-serif;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+      }
+      .launcher, .brand, .icon-button, .tab, .button, .session-name, .dialog-title {
+        font-family: "Hammersmith One", sans-serif;
+      }
       .launcher {
-        position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-        width: 40px; height: 34px; border: 1px solid #59616e; border-radius: 6px;
-        background: #1a1e24; color: #f6f7f8; font-size: 16px; font-weight: 800;
-        box-shadow: 0 3px 12px rgba(0,0,0,.36); display: grid; place-items: center;
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        width: 40px; height: 40px; border: 0; border-radius: 4px;
+        background: rgba(0, 0, 0, .4); color: #eee; font-size: 18px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, .2); display: grid; place-items: center;
+        transition: all .15s ease-in-out;
       }
+      .launcher:hover { background: rgba(255, 255, 255, .1); }
       .launcher[hidden], .panel[hidden], .view[hidden] { display: none; }
-      .dot { position: absolute; width: 7px; height: 7px; right: 5px; top: 5px; border-radius: 50%; background: #7d8794; }
-      .dot[data-tone="good"] { background: #69c77b; }
-      .dot[data-tone="busy"] { background: #e9b949; }
-      .dot[data-tone="bad"] { background: #e36b6b; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, .4); }
+      .dot[data-tone="good"] { background: #64a10a; }
+      .dot[data-tone="busy"] { background: #d6aa35; }
+      .dot[data-tone="bad"] { background: #c9523c; }
       .panel {
-        position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-        width: min(380px, calc(100vw - 16px)); max-height: calc(100vh - 20px);
-        overflow: hidden; border: 1px solid #59616e; border-radius: 6px;
-        background: #171a20; box-shadow: 0 8px 28px rgba(0,0,0,.5);
-        font-size: 12px;
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        width: min(430px, calc(100vw - 40px)); max-height: calc(100vh - 40px);
+        overflow: hidden; border: 0; border-radius: 4px;
+        background: rgba(0, 0, 0, .6); box-shadow: 0 2px 10px rgba(0, 0, 0, .2);
       }
-      .header { height: 42px; padding: 0 10px 0 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #353b45; }
-      .brand { font-size: 14px; font-weight: 800; flex: 1; }
-      .header-status { color: #aeb6c2; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .icon-button { width: 30px; height: 30px; padding: 0; border: 1px solid #4b5360; border-radius: 5px; background: #242a33; color: #f6f7f8; }
-      .host-bar { padding: 8px 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; border-bottom: 1px solid #353b45; }
-      .tabs { padding: 7px 10px 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-      .tab { min-height: 30px; border: 1px solid #414955; border-radius: 4px 4px 0 0; background: #20252d; color: #b9c0ca; }
-      .tab[aria-selected="true"] { color: #fff; background: #2d343e; border-bottom-color: #2d343e; }
-      .body { max-height: calc(100vh - 137px); overflow: auto; background: #1d2229; border-top: 1px solid #414955; }
-      .view { padding: 10px; }
+      .header { height: 54px; padding: 0 10px 0 16px; display: flex; align-items: center; gap: 10px; }
+      .brand { font-size: 18px; flex: 1; }
+      .header-status { color: rgba(255, 255, 255, .7); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .icon-button { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 4px; background: rgba(255, 255, 255, .1); color: #eee; font-size: 18px; transition: all .15s ease-in-out; }
+      .host-bar { padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; background: rgba(0, 0, 0, .2); }
+      .tabs { padding: 10px 0 0; display: flex; justify-content: flex-start; }
+      .tab { width: auto; height: 38px; padding: 0 14px; border: 0; border-radius: 0; background: rgba(0, 0, 0, .35); color: rgba(255, 255, 255, .7); transition: all .15s ease-in-out; }
+      .tab:last-child { border-radius: 0 3px 0 0; }
+      .tab:hover, .tab:focus-visible, .tab[aria-selected="true"] { color: #eee; background: rgba(0, 0, 0, .2); outline: 0; }
+      .body { max-height: calc(100vh - 172px); overflow: auto; background: rgba(0, 0, 0, .2); }
+      .view { padding: 12px 10px 10px; }
       select, input {
-        width: 100%; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid #4b5360;
-        border-radius: 4px; outline: none; background: #111419; color: #f6f7f8;
+        width: 100%; min-width: 0; height: 40px; padding: 0 12px; border: 2px solid transparent;
+        border-radius: 4px; outline: none; background: rgba(0, 0, 0, .4); color: #eee;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, .2); transition: all .15s ease-in-out;
       }
-      input:focus, select:focus { border-color: #69c77b; box-shadow: 0 0 0 2px rgba(105,199,123,.17); }
-      label { display: grid; gap: 5px; color: #bfc6cf; min-width: 0; }
-      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+      input:focus, select:focus { border-color: #1d8dee; background: rgba(0, 0, 0, .55); }
+      label { display: grid; gap: 6px; color: rgba(255, 255, 255, .8); min-width: 0; }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 10px; }
       .span-2 { grid-column: 1 / -1; }
-      .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-      .button { min-height: 31px; padding: 0 11px; border: 1px solid #4b5360; border-radius: 4px; background: #2a3039; color: #f6f7f8; }
-      .button:hover:not(:disabled), .icon-button:hover:not(:disabled), .tab:hover { background: #353d48; }
-      .button.primary { border-color: #5cae6b; background: #3f8e50; }
-      .button.primary:hover:not(:disabled) { background: #4a9f5c; }
-      .button.danger { color: #ffb9b9; border-color: #70464a; }
-      .empty { padding: 24px 10px; text-align: center; color: #929ca9; }
-      .session-list { display: grid; }
-      .session { padding: 10px 2px; border-bottom: 1px solid #343a44; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-      .session:last-child { border-bottom: 0; }
-      .session-name { font-size: 13px; font-weight: 800; overflow-wrap: anywhere; }
-      .session-meta { margin-top: 3px; color: #99a3af; line-height: 1.35; overflow-wrap: anywhere; }
-      .session-state { display: inline-flex; align-items: center; gap: 5px; color: #d7dce2; }
-      .session-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #e9b949; }
-      .session-state.live::before { background: #69c77b; }
-      .session-actions { display: flex; gap: 5px; }
-      .session-actions .button { padding: 0 8px; }
-      .message { min-height: 18px; margin-top: 8px; color: #9ea8b5; line-height: 1.4; overflow-wrap: anywhere; }
-      .message[data-tone="bad"] { color: #ff9d9d; }
-      .message[data-tone="good"] { color: #8dda9c; }
-      .host-list { margin-bottom: 10px; display: grid; gap: 5px; }
-      .host-item { min-height: 34px; padding: 0 9px; border: 1px solid #414955; border-radius: 4px; background: #222831; color: #f6f7f8; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .host-item[aria-current="true"] { border-color: #69c77b; }
-      dialog { width: min(330px, calc(100vw - 28px)); padding: 0; border: 1px solid #59616e; border-radius: 6px; background: #1a1e24; color: #f6f7f8; }
-      dialog::backdrop { background: rgba(0,0,0,.62); }
-      .dialog-body { padding: 14px; display: grid; gap: 10px; }
-      .dialog-title { margin: 0; font-size: 15px; }
-      .dialog-message { color: #aeb7c2; line-height: 1.4; overflow-wrap: anywhere; }
+      .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .button { height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #444; color: #eee; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); transition: all .15s ease-in-out; }
+      .button:hover:not(:disabled), .icon-button:hover:not(:disabled) { background: #555; }
+      .button.primary { background: #47950d; }
+      .button.primary:hover:not(:disabled) { background: #64b820; }
+      .button.danger { background: #b3353c; }
+      .button.danger:hover:not(:disabled) { background: #cb575b; }
+      .empty { padding: 28px 10px; text-align: center; color: rgba(255, 255, 255, .6); }
+      .session-list { display: grid; gap: 6px; }
+      .session { padding: 10px; border-radius: 3px; background: rgba(255, 255, 255, .1); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+      .session-name { font-size: 14px; overflow-wrap: anywhere; }
+      .session-meta { margin-top: 3px; color: rgba(255, 255, 255, .6); line-height: 1.4; overflow-wrap: anywhere; }
+      .session-state { display: inline-flex; align-items: center; gap: 6px; color: rgba(255, 255, 255, .8); }
+      .session-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #d6aa35; }
+      .session-state.live::before { background: #64a10a; }
+      .session-actions { display: flex; gap: 6px; }
+      .session-actions .button { padding: 0 12px; }
+      .message { min-height: 18px; margin-top: 8px; color: rgba(255, 255, 255, .6); line-height: 1.4; overflow-wrap: anywhere; }
+      .message:empty { display: none; }
+      .message[data-tone="bad"] { color: #c9523c; }
+      .message[data-tone="good"] { color: #76bd2f; }
+      .host-list { margin-bottom: 12px; display: grid; gap: 6px; }
+      .host-item { height: 40px; padding: 0 12px; border: 2px solid transparent; border-radius: 3px; background: rgba(255, 255, 255, .1); color: #eee; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: all .15s ease-in-out; }
+      .host-item:hover { background: rgba(255, 255, 255, .16); }
+      .host-item[aria-current="true"] { border-color: #1d8dee; background: rgba(29, 141, 238, .2); }
+      dialog { width: min(350px, calc(100vw - 40px)); padding: 0; border: 0; border-radius: 4px; background: rgba(0, 0, 0, .8); color: #eee; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); }
+      dialog::backdrop { background: rgba(0, 0, 0, .6); }
+      .dialog-body { padding: 16px; display: grid; gap: 12px; }
+      .dialog-title { margin: 0; font-size: 18px; }
+      .dialog-message { color: rgba(255, 255, 255, .7); line-height: 1.4; overflow-wrap: anywhere; }
       @media (max-width: 520px) {
         .header-status { max-width: 150px; }
         .form-grid { grid-template-columns: 1fr; }
@@ -128,12 +139,12 @@
         .session-actions { justify-content: flex-end; }
       }
       @media (prefers-reduced-motion: no-preference) {
-        .panel, .launcher { animation: dandelion-in .12s ease-out; }
+        .panel, .launcher { animation: dandelion-in .15s ease-in-out; }
         @keyframes dandelion-in { from { opacity: 0; transform: translateX(-50%) translateY(-4px); } }
       }
     </style>
     <button class="launcher" type="button" title="Dandelion" aria-label="Open Dandelion">
-      D<span class="dot" data-role="dot"></span>
+      <span class="dot" data-role="dot"></span>
     </button>
     <section class="panel" aria-label="Dandelion session saver">
       <header class="header">
