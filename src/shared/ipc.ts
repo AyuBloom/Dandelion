@@ -1,3 +1,8 @@
+import type {
+  AutomationId,
+  AutomationUpdate,
+  AutomationView,
+} from "../automations/automations.ts";
 import type { DurableConnectionId, ListenerId, SessionId } from "../shared/ids";
 import type { InputPacketData } from "./packets";
 
@@ -78,5 +83,25 @@ export type IpcMessage =
   }>
   | IpcEnvelope<"engine.input", Uint8Array>
   | IpcEnvelope<"engine.rpc", Uint8Array>
+  | IpcEnvelope<"engine.automations.get", {
+    sessionId: SessionId;
+    requestId: string;
+  }>
+  | IpcEnvelope<"engine.automation.update", {
+    sessionId: SessionId;
+    requestId: string;
+    automationId: AutomationId;
+    update: AutomationUpdate;
+  }>
+  | IpcEnvelope<"session.automations", {
+    sessionId: SessionId;
+    requestId: string;
+    automations: AutomationView[];
+  }>
+  | IpcEnvelope<"session.automations.error", {
+    sessionId: SessionId;
+    requestId: string;
+    error: string;
+  }>
   | IpcEnvelope<"session.input", InputPacketData>
   | IpcEnvelope<"session.rpc", Uint8Array>;

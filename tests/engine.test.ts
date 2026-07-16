@@ -3,6 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 
 import { PacketIds } from "../src/network/enums.ts";
 import MiniCodec from "../src/network/mini-codec.ts";
+import type { AutomationView } from "../src/automations/automations.ts";
 import { parseListenerInput } from "../src/session/input.ts";
 import type { IpcMessage, SessionHealth, SyncData } from "../src/shared/ipc.ts";
 import { Engine } from "../src/engine/engine.ts";
@@ -471,6 +472,185 @@ test("session deletion API returns accepted and signals the session", async () =
   expect(signals).toEqual(["SIGTERM"]);
 });
 
+test("automation API reads and updates an unprotected session through IPC", async () => {
+  const realEngine = new Engine();
+  const engine = realEngine as unknown as EngineTestHarness;
+  const sessionId = crypto.randomUUID();
+  const sent: IpcMessage[] = [];
+  let views = automationViews();
+
+  engine.sessions.set(sessionId, {
+    send: (message) => {
+      const request = message as IpcMessage;
+      sent.push(request);
+      if (request.type === "engine.automation.update") {
+        views = views.map((automation) =>
+          automation.id === request.payload.automationId
+            ? {
+                ...automation,
+                enabled: request.payload.update.enabled ?? automation.enabled,
+                status: request.payload.update.enabled
+                  ? "running"
+                  : automation.status,
+                settings: {
+                  ...automation.settings,
+                  ...(request.payload.update.settings as Record<string, boolean>),
+                },
+              }
+            : automation,
+        );
+      }
+      if (
+        request.type === "engine.automations.get" ||
+        request.type === "engine.automation.update"
+      ) {
+        engine.handleSessionIPC({
+          type: "session.automations",
+          from: "session",
+          to: "engine",
+          payload: {
+            sessionId,
+            requestId: request.payload.requestId,
+            automations: views,
+          },
+        });
+      }
+    },
+  });
+
+  const getResponse = await realEngine.app.handle(
+    new Request(`http://localhost/sessions/${sessionId}/automations`),
+  );
+  expect(getResponse.status).toBe(200);
+  expect(await getResponse.json()).toEqual({ automations: automationViews() });
+
+  const patchResponse = await realEngine.app.handle(
+    new Request(
+      `http://localhost/sessions/${sessionId}/automations/autoAim`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          settings: { players: false },
+        }),
+      },
+    ),
+  );
+  expect(patchResponse.status).toBe(200);
+  expect(await patchResponse.json()).toMatchObject({
+    automation: {
+      id: "autoAim",
+      enabled: true,
+      status: "running",
+      settings: { players: false, zombies: true, npcs: true },
+    },
+  });
+  expect(sent.map(({ type }) => type)).toEqual([
+    "engine.automations.get",
+    "engine.automation.update",
+  ]);
+});
+
+test("automation API maps a rejected session update to HTTP 400", async () => {
+  const realEngine = new Engine();
+  const engine = realEngine as unknown as EngineTestHarness;
+  const sessionId = crypto.randomUUID();
+
+  engine.sessions.set(sessionId, {
+    send: (message) => {
+      const request = message as Extract<
+        IpcMessage,
+        { type: "engine.automation.update" }
+      >;
+      engine.handleSessionIPC({
+        type: "session.automations.error",
+        from: "session",
+        to: "engine",
+        payload: {
+          sessionId,
+          requestId: request.payload.requestId,
+          error: "Invalid autoAim setting: buildings",
+        },
+      });
+    },
+  });
+
+  const response = await realEngine.app.handle(
+    new Request(
+      `http://localhost/sessions/${sessionId}/automations/autoAim`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ settings: { buildings: true } }),
+      },
+    ),
+  );
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({
+    ok: false,
+    code: "invalid_request",
+    error: "Invalid autoAim setting: buildings",
+  });
+});
+
+test("protected automation API consumes a valid token only once", async () => {
+  const realEngine = new Engine();
+  const engine = realEngine as unknown as EngineTestHarness;
+  const sessionId = crypto.randomUUID();
+  const sent: IpcMessage[] = [];
+  engine.passwordHashes.set(sessionId, await Bun.password.hash("password123"));
+  engine.sessions.set(sessionId, {
+    send: (message) => {
+      const request = message as Extract<
+        IpcMessage,
+        { type: "engine.automations.get" }
+      >;
+      sent.push(request);
+      engine.handleSessionIPC({
+        type: "session.automations",
+        from: "session",
+        to: "engine",
+        payload: {
+          sessionId,
+          requestId: request.payload.requestId,
+          automations: automationViews(),
+        },
+      });
+    },
+  });
+
+  const missing = await realEngine.app.handle(
+    new Request(`http://localhost/sessions/${sessionId}/automations`),
+  );
+  expect(missing.status).toBe(401);
+  expect(sent).toHaveLength(0);
+
+  const auth = await engine.createAuthToken(
+    sessionId,
+    "password123",
+    "automation-client",
+  );
+  if (!auth.ok) throw new Error("Expected authentication to succeed");
+
+  const authorized = await realEngine.app.handle(
+    new Request(
+      `http://localhost/sessions/${sessionId}/automations?token=${auth.token}`,
+    ),
+  );
+  expect(authorized.status).toBe(200);
+  expect(sent).toHaveLength(1);
+
+  const replayed = await realEngine.app.handle(
+    new Request(
+      `http://localhost/sessions/${sessionId}/automations?token=${auth.token}`,
+    ),
+  );
+  expect(replayed.status).toBe(401);
+  expect(sent).toHaveLength(1);
+});
+
 test("terminal sessions close and remove all listeners", () => {
   const engine = new Engine() as unknown as EngineTestHarness;
   const sessionId = "session";
@@ -661,4 +841,64 @@ function listener(id: string, sessionId: string): TestListener {
     ws: { sendBinary: () => {} },
     syncState: { status: "live", queue: [] },
   };
+}
+
+function automationViews(): AutomationView[] {
+  return [
+    {
+      id: "ahrc",
+      label: "AHRC",
+      description: "Automatically harvest and collect harvester resources.",
+      implementation: "mock",
+      enabled: false,
+      status: "disabled",
+      error: null,
+      settings: { collect: true, harvest: true },
+      fields: [
+        { key: "collect", label: "Collect", type: "boolean", default: true },
+        { key: "harvest", label: "Harvest", type: "boolean", default: true },
+      ],
+    },
+    {
+      id: "autoAim",
+      label: "AutoAim",
+      description: "Aim at selected targets while preserving unrelated input.",
+      implementation: "mock",
+      enabled: false,
+      status: "disabled",
+      error: null,
+      settings: { players: true, zombies: true, npcs: true },
+      fields: [
+        {
+          key: "players",
+          label: "Players (outside party)",
+          type: "boolean",
+          default: true,
+        },
+        {
+          key: "zombies",
+          label: "Zombies (including bosses)",
+          type: "boolean",
+          default: true,
+        },
+        {
+          key: "npcs",
+          label: "NPCs (neutrals)",
+          type: "boolean",
+          default: true,
+        },
+      ],
+    },
+    {
+      id: "autoBow",
+      label: "Auto Bow",
+      description: "Automatically fires the equipped bow on entity updates.",
+      implementation: "active",
+      enabled: false,
+      status: "disabled",
+      error: null,
+      settings: {},
+      fields: [],
+    },
+  ];
 }

@@ -63,7 +63,7 @@ curl --fail-with-body --silent --show-error \
     "id": "v1007",
     "hostname": "zombs-2d4ca620-0.eggs.gg",
     "ipAddress": "45.76.166.32",
-    "plugins": []
+    "automations": []
   }'
 ```
 
@@ -86,9 +86,9 @@ The request fields are:
 | `id` | Yes | `v` followed by 4 digits | The ZOMBS.io server id |
 | `hostname` | Yes | `zombs-[a-z0-9]+-0.eggs.gg` | The hostname used for the WebSocket |
 | `ipAddress` | Yes | IPv4 address | The IP address passed into the solver |
-| `plugins` | Yes | Array | Use `[]`; plugin loading is not active yet |
+| `automations` | Yes | Array | Automation IDs to enable for this session; use `[]` to start with all disabled |
 | `psk` | No | Exactly 20 ASCII letters | Automatically joins that party share key after entering the world |
-| `password` | No | 8 to 32 characters | Protects WebSocket attachment and deletion |
+| `password` | No | 8 to 32 characters | Protects attachment, automation management, and deletion |
 
 For example, a protected session that joins an existing party is created with:
 
@@ -101,7 +101,7 @@ curl --fail-with-body --silent --show-error \
     "id": "v1007",
     "hostname": "zombs-2d4ca620-0.eggs.gg",
     "ipAddress": "45.76.166.32",
-    "plugins": [],
+    "automations": [],
     "psk": "abcdefghijklmnopqrst",
     "password": "replace-this-password"
   }'
@@ -182,14 +182,49 @@ The response contains a 64-character token:
 A token:
 
 - expires after 60 seconds;
-- is consumed by one WebSocket attachment or one delete request;
+- is consumed by one WebSocket attachment, automation request, or delete request;
 - is invalidated when another token is successfully issued for the same
   session.
 
 Request a fresh token for each protected operation. Five failed password
 attempts from one client within 60 seconds temporarily produce HTTP `429`.
 
-## 6. Attach a game client
+## 6. Manage session automations
+
+Read the automation catalog and current state for a public session:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  "$BASE_URL/sessions/$SESSION_ID/automations"
+```
+
+Enable AHRC and change one setting while the session is running:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --request PATCH "$BASE_URL/sessions/$SESSION_ID/automations/ahrc" \
+  --header 'content-type: application/json' \
+  --data '{"enabled":true,"settings":{"collect":false}}'
+```
+
+Available automations and their default settings are:
+
+- `ahrc`: `collect` and `harvest`, both `true`;
+- `autoAim`: `players`, `zombies`, and `npcs`, all `true`;
+- `autoBow`: no additional settings.
+
+Every automation starts disabled unless its ID is included in the
+`automations` creation field. Settings apply immediately, remain active without
+listeners, and are owned by the session process. AHRC reacts to entity updates
+and services every Harvester owned by the session player's party. Auto Bow
+releases and presses the bow input on every entity update. AutoAim is still a
+mock: its enabled state and settings persist, but it does not perform game
+actions yet.
+
+Protected sessions require a fresh one-time token in `?token=...` for every GET
+or PATCH request.
+
+## 7. Attach a game client
 
 The listener address for a public session is:
 
@@ -255,7 +290,7 @@ ZOMBS.io disconnection constraint documented by the
 Multiple listeners may watch and control the same public session. Valid input
 and RPC packets from every live listener are forwarded immediately.
 
-## 7. Stop a session safely
+## 8. Stop a session safely
 
 Stop a public session:
 

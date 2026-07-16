@@ -11,9 +11,14 @@ import type { Socket, Subprocess } from "bun";
 import { Elysia, t } from "elysia";
 import type { ElysiaWS } from "elysia/ws";
 
+import {
+  AvailableAutomations,
+  type AutomationId,
+  type AutomationUpdate,
+  type AutomationView,
+} from "../automations/automations.ts";
 import { PacketIds } from "../network/enums.ts";
 import { ServerCodec } from "../network/server-codec.ts";
-import { AvailablePlugins } from "../plugins/plugins.ts";
 import { parseListenerInput } from "../session/input.ts";
 import { SESSIONS_CACHE_TTL_MS } from "../shared/config.ts";
 import type { ListenerId, SessionId } from "../shared/ids.ts";
@@ -65,6 +70,22 @@ type StopSessionResult =
       error: string;
     };
 
+type AutomationErrorCode =
+  | "invalid_request"
+  | "not_found"
+  | "unauthorized"
+  | "unavailable";
+
+type AutomationResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; code: AutomationErrorCode; error: string };
+
+interface PendingAutomationRequest {
+  sessionId: SessionId;
+  resolve(result: AutomationResult<AutomationView[]>): void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 interface Listener {
   id: ListenerId;
   sessionId: SessionId;
@@ -91,6 +112,7 @@ const AUTH_TOKEN_TTL_MS = 60_000;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 const MAX_AUTH_FAILURES = 5;
 const AUTH_DIRECTORY = ".session-auth";
+const AUTOMATION_REQUEST_TIMEOUT_MS = 3_000;
 const allowedListenerOpcodes = new Set<number>([
   PacketIds.PACKET_INPUT,
   PacketIds.PACKET_ENTER_WORLD,
@@ -166,9 +188,10 @@ export class Engine {
               error: "Invalid Share Key",
             }),
           ),
-          plugins: t.Array(t.UnionEnum(AvailablePlugins), {
-            maxItems: AvailablePlugins.length,
-            error: "Invalid plugins",
+          automations: t.Array(t.UnionEnum(AvailableAutomations), {
+            maxItems: AvailableAutomations.length,
+            uniqueItems: true,
+            error: "Invalid automations",
           }),
           password: t.Optional(
             t.String({
@@ -205,6 +228,51 @@ export class Engine {
         }),
         body: t.Object({
           password: t.String({ minLength: 8, maxLength: 32 }),
+        }),
+      },
+    )
+    .get(
+      "/sessions/:id/automations",
+      async ({ params, query, status }) => {
+        const result = await this.getAutomations(
+          params.id as SessionId,
+          query.token,
+        );
+        if (result.ok) return result.data;
+        return status(automationStatusCode(result.code), result);
+      },
+      {
+        params: t.Object({
+          id: t.String({ format: "uuid" }),
+        }),
+        query: t.Object({
+          token: t.Optional(t.String({ minLength: 64, maxLength: 64 })),
+        }),
+      },
+    )
+    .patch(
+      "/sessions/:id/automations/:automationId",
+      async ({ params, query, body, status }) => {
+        const result = await this.updateAutomation(
+          params.id as SessionId,
+          params.automationId as AutomationId,
+          body,
+          query.token,
+        );
+        if (result.ok) return result.data;
+        return status(automationStatusCode(result.code), result);
+      },
+      {
+        params: t.Object({
+          id: t.String({ format: "uuid" }),
+          automationId: t.UnionEnum(AvailableAutomations),
+        }),
+        query: t.Object({
+          token: t.Optional(t.String({ minLength: 64, maxLength: 64 })),
+        }),
+        body: t.Object({
+          enabled: t.Optional(t.Boolean()),
+          settings: t.Optional(t.Record(t.String(), t.Boolean())),
         }),
       },
     )
@@ -265,6 +333,10 @@ export class Engine {
   private readonly passwordHashes = new Map<SessionId, string>();
   private readonly authTokens = new Map<string, AuthToken>();
   private readonly authFailures = new Map<string, AuthFailures>();
+  private readonly pendingAutomationRequests = new Map<
+    string,
+    PendingAutomationRequest
+  >();
   private readonly codec = new ServerCodec();
   private sessionsCache: SessionsCache = {
     data: [],
@@ -313,7 +385,7 @@ export class Engine {
     hostname: string;
     ipAddress: string;
     psk?: string;
-    plugins: string[];
+    automations: AutomationId[];
     password?: string;
   }): Promise<
     { ok: true; sessionId: SessionId } | { ok: false; error: string }
@@ -341,8 +413,8 @@ export class Engine {
     if (body.psk) {
       args.push("--psk", body.psk);
     }
-    if (body.plugins.length > 0) {
-      args.push("--plugins", body.plugins.join(","));
+    if (body.automations.length > 0) {
+      args.push("--automations", body.automations.join(","));
     }
     try {
       const passwordHash = body.password
@@ -432,6 +504,24 @@ export class Engine {
           message.payload.sessionId,
           message.payload.listenerId,
           message.payload.reason,
+        );
+        break;
+      case "session.automations":
+        this.resolveAutomationRequest(
+          message.payload.sessionId,
+          message.payload.requestId,
+          { ok: true, data: message.payload.automations },
+        );
+        break;
+      case "session.automations.error":
+        this.resolveAutomationRequest(
+          message.payload.sessionId,
+          message.payload.requestId,
+          {
+            ok: false,
+            code: "invalid_request",
+            error: message.payload.error,
+          },
         );
         break;
       default:
@@ -702,6 +792,7 @@ export class Engine {
   private removeSession(sessionId: SessionId): void {
     const child = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    this.failAutomationRequests(sessionId);
     child?.close?.();
     if (child?.pid !== undefined) this.sessionIdByPid.delete(child.pid);
     for (const [pid, mappedSessionId] of this.sessionIdByPid) {
@@ -735,12 +826,136 @@ export class Engine {
     void rm(`.sessions/${sessionId}.json`, { force: true }).catch((error) => {
       logger.warn(`Failed to remove session health for ${sessionId}`, { error });
     });
+    void rm(`.session-automations/${sessionId}.json`, { force: true }).catch(
+      (error) => {
+        logger.warn(`Failed to remove automations for ${sessionId}`, { error });
+      },
+    );
     void this.removePasswordHash(sessionId);
   }
 
   private handleSessionExit(child: Subprocess): void {
     const sessionId = this.sessionIdByPid.get(child.pid);
     if (sessionId) this.removeSession(sessionId);
+  }
+
+  private async getAutomations(
+    sessionId: SessionId,
+    token?: string,
+  ): Promise<AutomationResult<{ automations: AutomationView[] }>> {
+    const access = await this.authorizeAutomationRequest(sessionId, token);
+    if (!access.ok) return access;
+
+    const result = await this.requestAutomations(sessionId, (requestId) => ({
+      type: "engine.automations.get",
+      from: "engine",
+      to: "session",
+      payload: { sessionId, requestId },
+    }));
+    return result.ok
+      ? { ok: true, data: { automations: result.data } }
+      : result;
+  }
+
+  private async updateAutomation(
+    sessionId: SessionId,
+    automationId: AutomationId,
+    update: AutomationUpdate,
+    token?: string,
+  ): Promise<AutomationResult<{ automation: AutomationView }>> {
+    const access = await this.authorizeAutomationRequest(sessionId, token);
+    if (!access.ok) return access;
+
+    const result = await this.requestAutomations(sessionId, (requestId) => ({
+      type: "engine.automation.update",
+      from: "engine",
+      to: "session",
+      payload: { sessionId, requestId, automationId, update },
+    }));
+    if (!result.ok) return result;
+
+    const automation = result.data.find(({ id }) => id === automationId);
+    return automation
+      ? { ok: true, data: { automation } }
+      : {
+          ok: false,
+          code: "unavailable",
+          error: "Automation response was incomplete",
+        };
+  }
+
+  private async authorizeAutomationRequest(
+    sessionId: SessionId,
+    token?: string,
+  ): Promise<AutomationResult<undefined>> {
+    if (!this.sessions.has(sessionId)) await this.getSessions();
+    if (!this.sessions.has(sessionId)) {
+      return { ok: false, code: "not_found", error: "Session not found" };
+    }
+
+    await this.loadPasswordHash(sessionId);
+    if (!this.consumeAuthToken(sessionId, token)) {
+      return { ok: false, code: "unauthorized", error: "Unauthorized" };
+    }
+    return { ok: true, data: undefined };
+  }
+
+  private requestAutomations(
+    sessionId: SessionId,
+    createMessage: (requestId: string) => IpcMessage,
+  ): Promise<AutomationResult<AutomationView[]>> {
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingAutomationRequests.delete(requestId);
+        resolve({
+          ok: false,
+          code: "unavailable",
+          error: "Session automation request timed out",
+        });
+      }, AUTOMATION_REQUEST_TIMEOUT_MS);
+
+      this.pendingAutomationRequests.set(requestId, {
+        sessionId,
+        resolve,
+        timeout,
+      });
+      if (this.sendToSession(sessionId, createMessage(requestId))) return;
+
+      clearTimeout(timeout);
+      this.pendingAutomationRequests.delete(requestId);
+      resolve({
+        ok: false,
+        code: "unavailable",
+        error: "Session is unavailable",
+      });
+    });
+  }
+
+  private resolveAutomationRequest(
+    sessionId: SessionId,
+    requestId: string,
+    result: AutomationResult<AutomationView[]>,
+  ): void {
+    const pending = this.pendingAutomationRequests.get(requestId);
+    if (!pending || pending.sessionId !== sessionId) return;
+
+    clearTimeout(pending.timeout);
+    this.pendingAutomationRequests.delete(requestId);
+    pending.resolve(result);
+  }
+
+  private failAutomationRequests(sessionId: SessionId): void {
+    for (const [requestId, pending] of this.pendingAutomationRequests) {
+      if (pending.sessionId !== sessionId) continue;
+      clearTimeout(pending.timeout);
+      this.pendingAutomationRequests.delete(requestId);
+      pending.resolve({
+        ok: false,
+        code: "unavailable",
+        error: "Session is unavailable",
+      });
+    }
   }
 
   private async createAuthToken(
@@ -1008,6 +1223,7 @@ export class Engine {
   private detachSession(sessionId: SessionId): void {
     const session = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    this.failAutomationRequests(sessionId);
     session?.close?.();
 
     const listenerIds = this.listenersBySession.get(sessionId);
@@ -1020,6 +1236,21 @@ export class Engine {
     }
 
     this.listenersBySession.delete(sessionId);
+  }
+}
+
+function automationStatusCode(
+  code: AutomationErrorCode,
+): 400 | 401 | 404 | 503 {
+  switch (code) {
+    case "invalid_request":
+      return 400;
+    case "unauthorized":
+      return 401;
+    case "not_found":
+      return 404;
+    case "unavailable":
+      return 503;
   }
 }
 

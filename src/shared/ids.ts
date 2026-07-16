@@ -3,10 +3,8 @@
 
 export type SessionId = string;
 export type ListenerId = string;
-export type PluginId = string;
 export type DurableConnectionId = string;
 
 // Example:
 // const sessionId: SessionId = "session-abc";
 // const listenerId: ListenerId = "listener-123";
-

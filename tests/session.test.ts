@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
 
 import MiniCodec from "../src/network/mini-codec.ts";
 import { ServerCodec } from "../src/network/server-codec.ts";
@@ -46,6 +47,124 @@ test("session health uses the Engine-provided identity and name", () => {
 
   expect(session.health.sessionId).toBe("session-id");
   expect(session.health.sessionName).toBe("test-session");
+});
+
+test("session automation IPC returns defaults, applies settings immediately, and correlates responses", async () => {
+  const sessionId = crypto.randomUUID();
+  const session = new Session({
+    sessionId,
+    sessionName: "automation-test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const sent: IpcMessage[] = [];
+  const parent = process as unknown as {
+    send?: (message: unknown) => boolean;
+  };
+  const previousSend = parent.send;
+  parent.send = (message) => {
+    sent.push(message as IpcMessage);
+    return true;
+  };
+
+  try {
+    session.handleEngineIPC({
+      type: "engine.automations.get",
+      from: "engine",
+      to: "session",
+      payload: { sessionId: crypto.randomUUID(), requestId: "wrong-session" },
+    });
+    expect(sent).toEqual([]);
+
+    session.handleEngineIPC({
+      type: "engine.automations.get",
+      from: "engine",
+      to: "session",
+      payload: { sessionId, requestId: "get-defaults" },
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "session.automations",
+      payload: {
+        sessionId,
+        requestId: "get-defaults",
+        automations: [
+          {
+            id: "ahrc",
+            enabled: false,
+            status: "disabled",
+            settings: { collect: true, harvest: true },
+          },
+          {
+            id: "autoAim",
+            enabled: false,
+            status: "disabled",
+            settings: { players: true, zombies: true, npcs: true },
+          },
+          {
+            id: "autoBow",
+            enabled: false,
+            status: "disabled",
+            settings: {},
+          },
+        ],
+      },
+    });
+
+    session.handleEngineIPC({
+      type: "engine.automation.update",
+      from: "engine",
+      to: "session",
+      payload: {
+        sessionId,
+        requestId: "update-auto-aim",
+        automationId: "autoAim",
+        update: { enabled: true, settings: { players: false } },
+      },
+    });
+    await waitForMessages(sent, 2);
+    expect(sent[1]).toMatchObject({
+      type: "session.automations",
+      payload: {
+        sessionId,
+        requestId: "update-auto-aim",
+        automations: [
+          {},
+          {
+            id: "autoAim",
+            enabled: true,
+            status: "running",
+            settings: { players: false, zombies: true, npcs: true },
+          },
+          {},
+        ],
+      },
+    });
+
+    session.handleEngineIPC({
+      type: "engine.automation.update",
+      from: "engine",
+      to: "session",
+      payload: {
+        sessionId,
+        requestId: "invalid-update",
+        automationId: "autoAim",
+        update: { settings: { buildings: true } },
+      },
+    });
+    await waitForMessages(sent, 3);
+    expect(sent[2]).toMatchObject({
+      type: "session.automations.error",
+      payload: {
+        sessionId,
+        requestId: "invalid-update",
+        error: "Invalid autoAim setting: buildings",
+      },
+    });
+  } finally {
+    if (previousSend) parent.send = previousSend;
+    else delete parent.send;
+    await rm(`.session-automations/${sessionId}.json`, { force: true });
+  }
 });
 
 test("session applies the minimal listener input guards", () => {
@@ -433,4 +552,15 @@ function rpcMap(name: string, parameterName: string): RpcMapEntry {
 function configureRpc(codec: MiniCodec, rpc: RpcMapEntry): void {
   codec.rpcMaps = [rpc];
   codec.rpcMapsByName = { [rpc.name]: rpc };
+}
+
+async function waitForMessages(
+  messages: readonly unknown[],
+  count: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (messages.length >= count) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Timed out waiting for ${count} IPC messages`);
 }

@@ -1,5 +1,9 @@
 import { DandelionError, getErrorMessage } from "../shared/errors.ts";
 import { logger } from "../shared/logger.ts";
+import {
+  AvailableAutomations,
+  type AutomationId,
+} from "../automations/automations.ts";
 import { Session } from "./session.ts";
 
 const getArg = (name: string): string | undefined => {
@@ -15,6 +19,7 @@ const readArgs = () => {
   const ipAddress = getArg("--ip-address");
   const portArg = getArg("--port");
   const psk = getArg("--psk");
+  const automationsArg = getArg("--automations");
 
   if (!sessionId || !sessionName || !serverId || !hostname || !ipAddress) {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Missing session args");
@@ -23,12 +28,32 @@ const readArgs = () => {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Invalid party share key");
   }
 
+  const automations = automationsArg
+    ? automationsArg.split(",").filter(Boolean)
+    : [];
+  if (
+    automations.some(
+      (id) => !AvailableAutomations.includes(id as AutomationId),
+    )
+  ) {
+    throw new DandelionError("INVALID_PROCESS_ARGS", "Invalid automations");
+  }
+
   const port = portArg ? Number(portArg) : undefined;
   if (port !== undefined && !Number.isInteger(port)) {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Invalid server port");
   }
 
-  return { sessionId, sessionName, serverId, hostname, ipAddress, port, psk };
+  return {
+    sessionId,
+    sessionName,
+    serverId,
+    hostname,
+    ipAddress,
+    port,
+    psk,
+    automations: automations as AutomationId[],
+  };
 };
 
 const main = async () => {

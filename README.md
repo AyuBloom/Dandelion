@@ -29,5 +29,7 @@ Use `.\install.ps1 -Verify` to install dependencies, run TypeScript checking, an
 ## API
 - `POST /create-session` returns `202` with `{ ok: true, sessionId }`.
 - `POST /sessions/:id/auth` exchanges a password for a one-time, 60-second token.
+- `GET /sessions/:id/automations?token=...` reads per-session automation state.
+- `PATCH /sessions/:id/automations/:automationId?token=...` updates it in flight.
 - `DELETE /sessions/:id?token=...` gracefully stops a session. Protected sessions require a token.
 - `WS /sessions/:id?token=...` attaches a listener. Protected sessions require a token.

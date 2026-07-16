@@ -1,8 +1,16 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { Socket, Subprocess, UnixSocketListener } from "bun";
 
+import {
+  createAutomationViews,
+  createDefaultAutomationState,
+  isAutomationId,
+  type AutomationId,
+  type AutomationState,
+} from "../automations/automations.ts";
+import { AutomationManager } from "../automations/manager.ts";
 import { PacketIds } from "../network/enums.ts";
 import { ServerCodec } from "../network/server-codec.ts";
 import { getErrorMessage } from "../shared/errors.ts";
@@ -38,9 +46,11 @@ export interface SessionOptions {
   ipAddress: string;
   port?: number;
   psk?: string;
+  automations?: AutomationId[];
 }
 
 const MAX_MESSAGE_HISTORY = 500;
+const AUTOMATION_DIRECTORY = ".session-automations";
 
 const singleSyncRpcNames = [
   "PartyInfo",
@@ -77,9 +87,11 @@ export class Session {
   private readonly localBuildingsByUid = new Map<number, RpcObject>();
   private readonly virtualInventory = new Map<string, RpcObject>();
   private healthWrites = Promise.resolve();
+  private automationWrites = Promise.resolve();
   private pskSent = false;
   private readonly port: number;
   private readonly controlClients = new Set<Socket<SessionControlSocketData>>();
+  private automationManager: AutomationManager;
 
   constructor(private readonly options: SessionOptions) {
     const createdAt = new Date().toISOString();
@@ -99,9 +111,16 @@ export class Session {
 
     this.clientCodec = new MiniCodec();
     this.serverCodec = new ServerCodec();
+    this.automationManager = this.createAutomationManager(
+      this.createInitialAutomationState(),
+    );
   }
 
   async start(): Promise<number> {
+    await this.loadAutomations();
+    await this.automationManager.initialize();
+    this.queueAutomationWrite(this.automationManager.getState());
+    await this.automationWrites;
     await this.startControlServer();
     await this.writeHealth();
 
@@ -114,9 +133,12 @@ export class Session {
 
     this.health.lastSeenAt = new Date().toISOString();
     this.health.status = exitCode === 0 ? "closed" : "failed";
+    await this.automationManager.shutdown();
     this.queueHealthWrite();
     await this.healthWrites;
+    await this.automationWrites;
     await this.removeHealth();
+    await this.removeAutomations();
 
     this.sendToEngine({
       type: "session.ended",
@@ -261,10 +283,63 @@ export class Session {
       case "engine.rpc":
         this.handleListenerRpc(message.payload);
         break;
+      case "engine.automations.get":
+        if (message.payload.sessionId === this.health.sessionId) {
+          this.sendAutomationResponse(message.payload.requestId);
+        }
+        break;
+      case "engine.automation.update":
+        if (message.payload.sessionId === this.health.sessionId) {
+          void this.handleAutomationUpdate(
+            message.payload.requestId,
+            message.payload.automationId,
+            message.payload.update,
+          );
+        }
+        break;
       default:
         break;
     }
   };
+
+  private async handleAutomationUpdate(
+    requestId: string,
+    automationId: unknown,
+    update: unknown,
+  ): Promise<void> {
+    try {
+      if (!isAutomationId(automationId)) {
+        throw new Error("Invalid automation");
+      }
+      await this.automationManager.applyUpdate(automationId, update);
+      await this.automationWrites;
+      this.sendAutomationResponse(requestId);
+    } catch (error) {
+      this.sendToEngine({
+        type: "session.automations.error",
+        from: "session",
+        to: "engine",
+        payload: {
+          sessionId: this.health.sessionId,
+          requestId,
+          error: getErrorMessage(error),
+        },
+      } satisfies IpcMessage);
+    }
+  }
+
+  private sendAutomationResponse(requestId: string): void {
+    this.sendToEngine({
+      type: "session.automations",
+      from: "session",
+      to: "engine",
+      payload: {
+        sessionId: this.health.sessionId,
+        requestId,
+        automations: createAutomationViews(this.automationManager.getSnapshot()),
+      },
+    } satisfies IpcMessage);
+  }
 
   private handleListenerInput(packet: Uint8Array): void {
     const input = parseListenerInput(packet);
@@ -398,6 +473,7 @@ export class Session {
         case PacketIds.PACKET_ENTITY_UPDATE: {
           const update = decoded as EntityUpdateData;
           this.recordEntityUpdate(update);
+          this.automationManager.handleEntityUpdate();
           break;
         }
         case PacketIds.PACKET_RPC:
@@ -614,6 +690,122 @@ export class Session {
         response: [...this.localBuildingsByUid.values()],
       }),
     ];
+  }
+
+  private createInitialAutomationState(): AutomationState {
+    const state = createDefaultAutomationState();
+    for (const id of this.options.automations ?? []) {
+      state[id].enabled = true;
+    }
+    return state;
+  }
+
+  private createAutomationManager(state: unknown): AutomationManager {
+    return new AutomationManager({
+      state,
+      context: {
+        readSessionState: () =>
+          Object.freeze({
+            health: Object.freeze({ ...this.health }),
+            playerUid: this.enterWorld?.uid,
+            latestTick: this.latestTick,
+            entities: Object.freeze(
+              structuredClone([...this.entitySnapshot.values()]).map(
+                (entity) => Object.freeze({
+                  ...entity,
+                  model: typeof entity.entityType === "number"
+                    ? this.clientCodec.entityTypeNames[entity.entityType]
+                    : entity.model,
+                }),
+              ),
+            ),
+          }),
+        sendInput: (input) => {
+          if (this.health.status !== "in-world") return;
+          const packet = new Uint8Array(
+            this.clientCodec.encode(PacketIds.PACKET_INPUT, input),
+          );
+          const parsed = parseListenerInput(packet);
+          if (!parsed) throw new Error("Automation produced invalid input");
+          this.sendToDurable({
+            type: "session.input",
+            from: "session",
+            to: "durable-connection",
+            payload: parsed,
+          } satisfies IpcMessage);
+        },
+        sendRpc: (name, payload) => {
+          if (this.health.status !== "in-world") return;
+          const rpc: ClientRpcData = { name };
+          for (const [key, value] of Object.entries(payload)) {
+            if (typeof value !== "string" && typeof value !== "number") {
+              throw new Error("Automation produced an invalid RPC");
+            }
+            rpc[key] = value;
+          }
+          const packet = new Uint8Array(
+            this.clientCodec.encode(PacketIds.PACKET_RPC, rpc),
+          );
+          if (!this.sendRpcPacket(packet)) {
+            throw new Error("Automation RPC was rejected");
+          }
+        },
+        log: (message) =>
+          logger.info(message, {
+            sessionId: this.health.sessionId,
+          }),
+      },
+      onChange: (automationState) => {
+        this.queueAutomationWrite(automationState);
+      },
+    });
+  }
+
+  private async loadAutomations(): Promise<void> {
+    const path = `${AUTOMATION_DIRECTORY}/${this.health.sessionId}.json`;
+    const content = await readFile(path, "utf8").catch(() => undefined);
+    let state: unknown = this.createInitialAutomationState();
+    if (content) {
+      try {
+        state = JSON.parse(content);
+      } catch (error) {
+        logger.warn("Failed to read persisted automations", {
+          sessionId: this.health.sessionId,
+          error: getErrorMessage(error),
+        });
+      }
+    }
+    this.automationManager = this.createAutomationManager(state);
+  }
+
+  private queueAutomationWrite(state: AutomationState): void {
+    const snapshot = structuredClone(state);
+    this.automationWrites = this.automationWrites
+      .then(() => this.writeAutomations(snapshot))
+      .catch((error) => {
+        logger.warn("Failed to persist session automations", {
+          sessionId: this.health.sessionId,
+          error: getErrorMessage(error),
+        });
+      });
+  }
+
+  private async writeAutomations(state: AutomationState): Promise<void> {
+    await mkdir(AUTOMATION_DIRECTORY, { recursive: true });
+    const path = `${AUTOMATION_DIRECTORY}/${this.health.sessionId}.json`;
+    const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+    try {
+      await Bun.write(temporaryPath, JSON.stringify(state, null, 2));
+      await rename(temporaryPath, path);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
+  }
+
+  private async removeAutomations(): Promise<void> {
+    await rm(`${AUTOMATION_DIRECTORY}/${this.health.sessionId}.json`, {
+      force: true,
+    });
   }
 
   private queueHealthWrite(): void {

@@ -6,6 +6,7 @@ out
 dist
 *.tgz
 .sessions/
+.session-automations/
 .session-auth/
 .session-control/
 

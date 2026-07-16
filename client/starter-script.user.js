@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dandelion Session Saver
 // @namespace    https://github.com/AyuBloom/Dandelion
-// @version      0.1.2
+// @version      0.1.3
 // @description  Manage and attach Dandelion sessions from the ZOMBS.io client.
 // @match        https://zombs.io/*
 // @match        https://www.zombs.io/*
@@ -36,6 +36,8 @@
     network: null,
     sessions: [],
     activeAttachment: null,
+    automations: [],
+    automationRequestId: 0,
     hostDraftId: settings.selectedHostId,
     refreshTimer: null,
     clientTimer: null,
@@ -126,6 +128,18 @@
       .host-item { height: 40px; padding: 0 12px; border: 2px solid transparent; border-radius: 3px; background: rgba(255, 255, 255, .1); color: #eee; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: all .15s ease-in-out; }
       .host-item:hover { background: rgba(255, 255, 255, .16); }
       .host-item[aria-current="true"] { border-color: #1d8dee; background: rgba(29, 141, 238, .2); }
+      .automation-list { display: grid; gap: 8px; }
+      .automation { padding: 12px; border-radius: 3px; background: rgba(255, 255, 255, .1); }
+      .automation-header { display: flex; align-items: flex-start; gap: 12px; }
+      .automation-detail { min-width: 0; flex: 1; }
+      .automation-title { font-family: "Hammersmith One", sans-serif; font-size: 15px; }
+      .automation-description, .automation-status { margin-top: 3px; color: rgba(255, 255, 255, .6); line-height: 1.4; overflow-wrap: anywhere; }
+      .automation-status[data-tone="bad"] { color: #c9523c; }
+      .automation-status[data-tone="good"] { color: #76bd2f; }
+      .automation-settings { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .12); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .checkbox { display: flex; grid-template-columns: none; align-items: center; gap: 8px; color: #eee; }
+      .checkbox input { width: 17px; height: 17px; min-width: 17px; padding: 0; margin: 0; border: 0; box-shadow: none; accent-color: #64a10a; }
+      .automation-toggle { justify-content: flex-end; white-space: nowrap; }
       dialog { width: min(350px, calc(100vw - 40px)); padding: 0; border: 0; border-radius: 4px; background: rgba(0, 0, 0, .8); color: #eee; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); }
       dialog::backdrop { background: rgba(0, 0, 0, .6); }
       .dialog-body { padding: 16px; display: grid; gap: 12px; }
@@ -137,6 +151,7 @@
         .span-2 { grid-column: auto; }
         .session { grid-template-columns: 1fr; }
         .session-actions { justify-content: flex-end; }
+        .automation-settings { grid-template-columns: 1fr; }
       }
       @media (prefers-reduced-motion: no-preference) {
         .panel, .launcher { animation: dandelion-in .15s ease-in-out; }
@@ -160,6 +175,7 @@
         <button class="tab" type="button" data-tab="sessions">Sessions</button>
         <button class="tab" type="button" data-tab="create">Create</button>
         <button class="tab" type="button" data-tab="hosts">Hosts</button>
+        <button class="tab" type="button" data-tab="automations">Automations</button>
       </nav>
       <div class="body">
         <section class="view" data-view="sessions">
@@ -179,6 +195,10 @@
             </div>
             <div class="message" data-role="create-message"></div>
           </form>
+        </section>
+        <section class="view" data-view="automations">
+          <div class="automation-list" data-role="automation-list"></div>
+          <div class="message" data-role="automations-message"></div>
         </section>
         <section class="view" data-view="hosts">
           <div class="host-list" data-role="host-list"></div>
@@ -220,6 +240,8 @@
     sessionsMessage: shadow.querySelector('[data-role="sessions-message"]'),
     createForm: shadow.querySelector('[data-role="create-form"]'),
     createMessage: shadow.querySelector('[data-role="create-message"]'),
+    automationList: shadow.querySelector('[data-role="automation-list"]'),
+    automationsMessage: shadow.querySelector('[data-role="automations-message"]'),
     serverSelect: shadow.querySelector('[name="serverId"]'),
     hostList: shadow.querySelector('[data-role="host-list"]'),
     hostForm: shadow.querySelector('[data-role="host-form"]'),
@@ -239,7 +261,10 @@
 
   ui.launcher.addEventListener("click", () => setCollapsed(false));
   shadow.querySelector('[data-action="collapse"]').addEventListener("click", () => setCollapsed(true));
-  shadow.querySelector('[data-action="refresh"]').addEventListener("click", () => void refreshSessions());
+  shadow.querySelector('[data-action="refresh"]').addEventListener("click", () => {
+    if (settings.activeTab === "automations") void refreshAutomations();
+    else void refreshSessions();
+  });
   shadow.querySelector('[data-action="new-host"]').addEventListener("click", startNewHost);
   shadow.querySelector('[data-action="remove-host"]').addEventListener("click", removeHost);
   shadow.querySelector('[data-action="cancel-password"]').addEventListener("click", () => finishPasswordPrompt(null));
@@ -293,7 +318,7 @@
       hosts,
       selectedHostId,
       collapsed: Boolean(stored?.collapsed),
-      activeTab: ["sessions", "create", "hosts"].includes(stored?.activeTab)
+      activeTab: ["sessions", "create", "automations", "hosts"].includes(stored?.activeTab)
         ? stored.activeTab
         : "sessions",
       sessionName: typeof stored?.sessionName === "string" ? stored.sessionName.slice(0, 29) : "",
@@ -330,7 +355,7 @@
   }
 
   function setTab(tabName) {
-    const name = ["sessions", "create", "hosts"].includes(tabName) ? tabName : "sessions";
+    const name = ["sessions", "create", "automations", "hosts"].includes(tabName) ? tabName : "sessions";
     settings.activeTab = name;
     for (const tab of shadow.querySelectorAll("[data-tab]")) {
       tab.setAttribute("aria-selected", String(tab.dataset.tab === name));
@@ -340,6 +365,7 @@
     }
     if (name === "hosts") loadHostDraft(settings.selectedHostId);
     if (name === "sessions") void refreshSessions(true);
+    if (name === "automations") void refreshAutomations();
     saveSettings();
   }
 
@@ -502,6 +528,14 @@
   }
 
   function renderSessions() {
+    if (!state.activeAttachment && state.automations.length) {
+      state.automationRequestId += 1;
+      state.automations = [];
+      renderAutomations();
+      if (settings.activeTab === "automations") {
+        setMessage(ui.automationsMessage, "Attach to a session to manage automations");
+      }
+    }
     ui.sessionList.replaceChildren();
     if (state.sessions.length === 0) return;
     for (const session of state.sessions) {
@@ -542,6 +576,177 @@
       row.append(detail, actions);
       ui.sessionList.appendChild(row);
     }
+  }
+
+  async function refreshAutomations() {
+    const target = state.activeAttachment;
+    const requestId = ++state.automationRequestId;
+    state.automations = [];
+    renderAutomations();
+    if (!target) {
+      setMessage(ui.automationsMessage, "Attach to a session to manage automations");
+      return;
+    }
+
+    setMessage(ui.automationsMessage, "Loading automations");
+    try {
+      const result = await sessionRequest(
+        target,
+        "GET",
+        `/sessions/${encodeURIComponent(target.session.sessionId)}/automations`,
+      );
+      if (state.activeAttachment !== target || requestId !== state.automationRequestId) return;
+      if (!Array.isArray(result?.automations)) throw new Error("Host returned invalid automation data");
+      state.automations = result.automations.filter(isAutomation);
+      renderAutomations();
+      setMessage(ui.automationsMessage, state.automations.length ? "" : "No automations available");
+    } catch (error) {
+      if (state.activeAttachment !== target || requestId !== state.automationRequestId) return;
+      renderAutomations();
+      setMessage(ui.automationsMessage, error.message, "bad");
+    }
+  }
+
+  function isAutomation(item) {
+    return item && typeof item.id === "string" && typeof item.label === "string" &&
+      item.settings && typeof item.settings === "object" && Array.isArray(item.fields);
+  }
+
+  function renderAutomations() {
+    ui.automationList.replaceChildren();
+    if (!state.activeAttachment || state.automations.length === 0) return;
+
+    for (const automation of state.automations) {
+      const card = document.createElement("section");
+      card.className = "automation";
+
+      const header = document.createElement("div");
+      header.className = "automation-header";
+      const detail = document.createElement("div");
+      detail.className = "automation-detail";
+      const title = document.createElement("div");
+      title.className = "automation-title";
+      title.textContent = automation.label;
+      const description = document.createElement("div");
+      description.className = "automation-description";
+      description.textContent = automation.description || "Session automation";
+      const status = document.createElement("div");
+      status.className = "automation-status";
+      const failed = automation.error || ["error", "failed"].includes(automation.status);
+      status.dataset.tone = failed ? "bad" : automation.enabled ? "good" : "idle";
+      status.textContent = automation.updating ? "Updating" : automation.error || (automation.implementation === "mock"
+        ? automation.enabled ? "Mock enabled" : "Mock, disabled"
+        : automation.status || (automation.enabled ? "Enabled" : "Disabled"));
+      detail.append(title, description, status);
+
+      const toggleLabel = document.createElement("label");
+      toggleLabel.className = "checkbox automation-toggle";
+      const toggle = document.createElement("input");
+      toggle.type = "checkbox";
+      toggle.checked = Boolean(automation.enabled);
+      toggle.disabled = Boolean(automation.updating);
+      toggle.setAttribute("aria-label", `${automation.enabled ? "Disable" : "Enable"} ${automation.label}`);
+      toggle.addEventListener("change", () => {
+        void updateAutomation(automation, { enabled: toggle.checked });
+      });
+      toggleLabel.append(toggle, document.createTextNode("Enabled"));
+      header.append(detail, toggleLabel);
+      card.appendChild(header);
+
+      const fields = automation.fields.filter((field) =>
+        field && field.type === "boolean" && typeof field.key === "string" && typeof field.label === "string"
+      );
+      if (fields.length) {
+        const fieldset = document.createElement("div");
+        fieldset.className = "automation-settings";
+        for (const field of fields) {
+          const label = document.createElement("label");
+          label.className = "checkbox";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = automation.settings[field.key] !== false;
+          input.disabled = Boolean(automation.updating);
+          input.addEventListener("change", () => {
+            void updateAutomation(automation, { settings: { [field.key]: input.checked } });
+          });
+          label.append(input, document.createTextNode(field.label));
+          fieldset.appendChild(label);
+        }
+        card.appendChild(fieldset);
+      }
+      ui.automationList.appendChild(card);
+    }
+  }
+
+  async function updateAutomation(automation, patch) {
+    const target = state.activeAttachment;
+    if (!target || automation.updating) return;
+    automation.updating = true;
+    renderAutomations();
+    setMessage(ui.automationsMessage, `Updating ${automation.label}`);
+    try {
+      const result = await sessionRequest(
+        target,
+        "PATCH",
+        `/sessions/${encodeURIComponent(target.session.sessionId)}/automations/${encodeURIComponent(automation.id)}`,
+        patch,
+      );
+      if (state.activeAttachment !== target) return;
+      const updated = result?.automation || result;
+      if (!updated || updated.id !== automation.id) throw new Error("Host returned invalid automation data");
+      const index = state.automations.findIndex((item) => item.id === automation.id);
+      if (index !== -1) {
+        state.automations[index] = {
+          ...automation,
+          ...updated,
+          settings: { ...automation.settings, ...updated.settings },
+          fields: Array.isArray(updated.fields) ? updated.fields : automation.fields,
+          updating: false,
+        };
+      }
+      renderAutomations();
+      setMessage(ui.automationsMessage, `${automation.label} updated`, "good");
+    } catch (error) {
+      if (state.activeAttachment !== target) return;
+      automation.updating = false;
+      renderAutomations();
+      setMessage(ui.automationsMessage, error.message, "bad");
+    }
+  }
+
+  async function sessionRequest(target, method, path, body) {
+    const request = (token) => apiRequest(
+      target.host,
+      method,
+      token ? `${path}?token=${encodeURIComponent(token)}` : path,
+      body,
+    );
+
+    if (!target.automationProtected) {
+      try {
+        return await request();
+      } catch (error) {
+        if (error.status !== 401) throw error;
+        target.automationProtected = true;
+      }
+    }
+
+    let password = target.password;
+    if (!password) password = await promptForPassword(target.session.sessionName, "Password required");
+    if (!password) throw new Error("Authentication cancelled");
+
+    let token;
+    try {
+      token = await requestAuthToken(target.host, target.session.sessionId, password);
+    } catch (error) {
+      if (error.status !== 401 || password !== target.password) throw error;
+      password = await promptForPassword(target.session.sessionName, error.message);
+      if (!password) throw new Error("Authentication cancelled");
+      token = await requestAuthToken(target.host, target.session.sessionId, password);
+    }
+    if (state.activeAttachment !== target) throw new Error("Session attachment changed");
+    target.password = password;
+    return request(token);
   }
 
   function rememberCreateForm() {
@@ -591,7 +796,7 @@
         id: server.id,
         hostname: server.hostname,
         ipAddress: server.ipAddress,
-        plugins: [],
+        automations: [],
       };
       if (psk) payload.psk = psk;
       if (password) payload.password = password;
@@ -635,17 +840,21 @@
       session: { ...session },
       serverOptions: makeServerOptions(session),
       password,
+      automationProtected: false,
       awaitingPassword: false,
       checkInitialDeath: false,
       everInWorld: false,
       attempt: 0,
     };
     state.activeAttachment = target;
+    state.automationRequestId += 1;
+    state.automations = [];
     settings.lastSessionByHost[selectedHost.id] = session.sessionId;
     saveSettings();
     setMessage(ui.sessionsMessage, "");
     updateStatus("busy", `Attaching ${session.sessionName}`);
     renderSessions();
+    if (settings.activeTab === "automations") void refreshAutomations();
 
     if (state.game.ui?.setOption) {
       state.game.ui.setOption("nickname", session.sessionName);
