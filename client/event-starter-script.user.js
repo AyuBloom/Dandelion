@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Dandelion Event Session Saver
+// @name         Dandelion Session Saver (+)
 // @namespace    https://github.com/AyuBloom/Dandelion
-// @version      0.1.0
+// @version      0.1.3+
 // @description  Manage and attach password-gated event sessions from the ZOMBS.io client.
 // @match        https://zombs.io/*
 // @match        https://www.zombs.io/*
@@ -1021,6 +1021,7 @@
         network.sendEnterWorld({
           displayName: target.session.sessionName,
           extra: new ArrayBuffer(0),
+          password: "",
         });
       }
     });
