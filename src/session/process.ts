@@ -19,6 +19,7 @@ const readArgs = () => {
   const ipAddress = getArg("--ip-address");
   const portArg = getArg("--port");
   const psk = getArg("--psk");
+  const eventPassword = getArg("--event-password");
   const automationsArg = getArg("--automations");
 
   if (!sessionId || !sessionName || !serverId || !hostname || !ipAddress) {
@@ -52,6 +53,7 @@ const readArgs = () => {
     ipAddress,
     port,
     psk,
+    eventPassword,
     automations: automations as AutomationId[],
   };
 };

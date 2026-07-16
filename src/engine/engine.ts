@@ -201,6 +201,7 @@ export class Engine {
                 "Invalid password (tip: length must be between 8 and 32 characters)",
             }),
           ),
+          eventPassword: t.Optional(t.String()),
         }),
       },
     )
@@ -387,6 +388,7 @@ export class Engine {
     psk?: string;
     automations: AutomationId[];
     password?: string;
+    eventPassword?: string;
   }): Promise<
     { ok: true; sessionId: SessionId } | { ok: false; error: string }
   > {
@@ -415,6 +417,9 @@ export class Engine {
     }
     if (body.automations.length > 0) {
       args.push("--automations", body.automations.join(","));
+    }
+    if (body.eventPassword !== undefined) {
+      args.push("--event-password", body.eventPassword);
     }
     try {
       const passwordHash = body.password

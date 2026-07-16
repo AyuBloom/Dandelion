@@ -89,6 +89,7 @@ export interface ClientRpcData {
 export interface EnterWorldRequest {
   displayName: string;
   extra: ArrayBuffer;
+  password?: string;
 }
 
 export interface BlendRequest {

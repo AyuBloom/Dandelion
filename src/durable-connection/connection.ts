@@ -18,6 +18,7 @@ interface DurableConnectionOptions {
   ipAddress: string;
   port?: number;
   displayName: string;
+  eventPassword?: string;
 }
 
 const fakeMetrics = {
@@ -168,6 +169,7 @@ export class DurableConnection {
     this.sendPacket(PacketIds.PACKET_ENTER_WORLD, {
       displayName: this.options.displayName,
       extra,
+      password: this.options.eventPassword,
     });
     this.publishStatus("waiting-enter-world");
   }

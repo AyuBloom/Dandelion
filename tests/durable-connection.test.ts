@@ -15,19 +15,63 @@ interface DurableConnectionTestHarness {
     readyState: number;
     send: (packet: ArrayBuffer | Uint8Array) => void;
   };
-  solver?: { enterWorld2: () => Promise<Uint8Array> };
+  solver?: {
+    enterWorld2?: () => Promise<Uint8Array>;
+    solvePreEnter?: (challenge: Uint8Array) => Promise<ArrayBuffer>;
+  };
   options?: {
     sessionId: string;
     durableConnectionId: string;
     serverId: string;
     hostname: string;
     ipAddress: string;
+    displayName?: string;
+    eventPassword?: string;
   };
   handleSessionIPC(message: IpcMessage): void;
   handleMessageData(data: ArrayBuffer): Promise<void>;
   sendPing(): void;
   startKeepalive(): void;
 }
+
+test("durable connection includes the event password in enter-world", async () => {
+  const connection = Object.create(
+    DurableConnection.prototype,
+  ) as DurableConnectionTestHarness;
+  const sent: ArrayBuffer[] = [];
+  const extra = Uint8Array.of(11, 22, 33).buffer;
+
+  connection.codec = new MiniCodec();
+  connection.status = "waiting-pre-enter";
+  connection.options = {
+    sessionId: "session",
+    durableConnectionId: "durable",
+    serverId: "v1",
+    hostname: "example.com",
+    ipAddress: "127.0.0.1",
+    displayName: "EventPlayer",
+    eventPassword: "dandelion-event",
+  };
+  connection.solver = {
+    solvePreEnter: async () => extra,
+  };
+  connection.socket = {
+    readyState: WebSocket.OPEN,
+    send: (packet) => sent.push(copyBuffer(packet)),
+  };
+
+  await connection.handleMessageData(
+    Uint8Array.of(PacketIds.PACKET_PRE_ENTER_WORLD, 1).buffer,
+  );
+
+  expect(sent.map((packet) => [...new Uint8Array(packet)])).toEqual([
+    [...new Uint8Array(new MiniCodec().encode(PacketIds.PACKET_ENTER_WORLD, {
+      displayName: "EventPlayer",
+      extra,
+      password: "dandelion-event",
+    }))],
+  ]);
+});
 
 test("durable connection sends validated session inputs to the socket", () => {
   const connection = Object.create(

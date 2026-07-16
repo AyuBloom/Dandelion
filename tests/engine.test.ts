@@ -75,6 +75,18 @@ interface EngineTestHarness {
   persistPasswordHash(sessionId: string, passwordHash: string): Promise<void>;
   loadPasswordHash(sessionId: string): Promise<string | undefined>;
   removePasswordHash(sessionId: string): Promise<void>;
+  createSession(body: {
+    sessionName: string;
+    id: string;
+    hostname: string;
+    ipAddress: string;
+    psk?: string;
+    automations: string[];
+    password?: string;
+    eventPassword?: string;
+  }): Promise<
+    { ok: true; sessionId: string } | { ok: false; error: string }
+  >;
   forwardDurablePacket(
     sessionId: string,
     data: ArrayBuffer,
@@ -88,6 +100,46 @@ interface EngineTestHarness {
   reattachSessions(sessions: SessionHealth[]): Promise<void>;
   sendToSession(sessionId: string, message: IpcMessage): boolean;
 }
+
+test("create-session keeps event and session passwords separate", async () => {
+  const realEngine = new Engine();
+  const engine = realEngine as unknown as EngineTestHarness;
+  const sessionId = crypto.randomUUID();
+  let received: Parameters<EngineTestHarness["createSession"]>[0] | undefined;
+
+  engine.createSession = async (body) => {
+    received = body;
+    return { ok: true, sessionId };
+  };
+
+  const response = await realEngine.app.handle(
+    new Request("http://localhost/create-session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionName: "EventPlayer",
+        id: "v1007",
+        hostname: "zombs-2d4ca620-0.eggs.gg",
+        ipAddress: "45.76.166.32",
+        automations: [],
+        password: "session-password",
+        eventPassword: "dandelion-event",
+      }),
+    }),
+  );
+
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ ok: true, sessionId });
+  expect(received).toEqual({
+    sessionName: "EventPlayer",
+    id: "v1007",
+    hostname: "zombs-2d4ca620-0.eggs.gg",
+    ipAddress: "45.76.166.32",
+    automations: [],
+    password: "session-password",
+    eventPassword: "dandelion-event",
+  });
+});
 
 test("valid listener inputs are forwarded immediately", () => {
   const engine = new Engine() as unknown as EngineTestHarness;

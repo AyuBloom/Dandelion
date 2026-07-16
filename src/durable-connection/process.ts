@@ -15,6 +15,7 @@ const readArgs = () => {
   const ipAddress = getArg("--ip-address");
   const portArg = getArg("--port");
   const displayName = getArg("--display-name");
+  const eventPassword = getArg("--event-password");
 
   if (!sessionId || !durableConnectionId || !serverId || !hostname || !ipAddress || !displayName) {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Missing durable-connection args");
@@ -25,7 +26,16 @@ const readArgs = () => {
     throw new DandelionError("INVALID_PROCESS_ARGS", "Invalid durable-connection port");
   }
 
-  return { sessionId, durableConnectionId, serverId, hostname, ipAddress, port, displayName };
+  return {
+    sessionId,
+    durableConnectionId,
+    serverId,
+    hostname,
+    ipAddress,
+    port,
+    displayName,
+    eventPassword,
+  };
 };
 
 const main = async () => {

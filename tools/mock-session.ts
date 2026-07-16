@@ -27,6 +27,7 @@ const serverId = args.get("--id");
 const hostname = args.get("--hostname");
 const ipAddress = args.get("--ip-address");
 const displayName = args.get("--name") ?? `Dandelion${Math.floor(Math.random() * 1000)}`;
+const eventPassword = args.get("--event-password");
 const maxMs = Number(args.get("--timeout-ms") ?? 15000);
 const server = parseGameServerAddress({
   id: serverId,
@@ -36,7 +37,7 @@ const server = parseGameServerAddress({
 
 if (!server) {
   console.error(
-    "Usage: bun run tools/mock-session.ts --id v1007 --hostname zombs-2d4ca620-0.eggs.gg --ip-address 45.76.166.32",
+    "Usage: bun run tools/mock-session.ts --id v1007 --hostname zombs-2d4ca620-0.eggs.gg --ip-address 45.76.166.32 [--event-password PASSWORD]",
   );
   process.exit(1);
 }
@@ -121,7 +122,11 @@ try {
       switch (opcode) {
         case PacketIds.PACKET_PRE_ENTER_WORLD: {
           const extra = await solver.solvePreEnter(bytes.subarray(1));
-          sendPacket(PacketIds.PACKET_ENTER_WORLD, { displayName, extra });
+          sendPacket(PacketIds.PACKET_ENTER_WORLD, {
+            displayName,
+            extra,
+            password: eventPassword,
+          });
           break;
         }
         case PacketIds.PACKET_ENTER_WORLD: {

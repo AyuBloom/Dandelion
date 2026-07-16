@@ -47,6 +47,7 @@ export interface SessionOptions {
   port?: number;
   psk?: string;
   automations?: AutomationId[];
+  eventPassword?: string;
 }
 
 const MAX_MESSAGE_HISTORY = 500;
@@ -204,25 +205,30 @@ export class Session {
   }
 
   private startDurableConnection(): Subprocess {
+    const cmd = [
+      process.execPath,
+      durableProcessPath,
+      "--session-id",
+      this.health.sessionId,
+      "--durable-id",
+      this.health.durableConnectionId,
+      "--server-id",
+      this.options.serverId,
+      "--hostname",
+      this.options.hostname,
+      "--ip-address",
+      this.options.ipAddress,
+      "--port",
+      String(this.port),
+      "--display-name",
+      this.options.sessionName,
+    ];
+    if (this.options.eventPassword !== undefined) {
+      cmd.push("--event-password", this.options.eventPassword);
+    }
+
     return Bun.spawn({
-      cmd: [
-        process.execPath,
-        durableProcessPath,
-        "--session-id",
-        this.health.sessionId,
-        "--durable-id",
-        this.health.durableConnectionId,
-        "--server-id",
-        this.options.serverId,
-        "--hostname",
-        this.options.hostname,
-        "--ip-address",
-        this.options.ipAddress,
-        "--port",
-        String(this.port),
-        "--display-name",
-        this.options.sessionName,
-      ],
+      cmd,
       stdin: "ignore",
       stdout: "inherit",
       stderr: "inherit",

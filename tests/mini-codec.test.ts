@@ -1,9 +1,29 @@
 import { expect, test } from "bun:test";
+import ByteBuffer from "bytebuffer";
 
 import MiniCodec from "../src/network/mini-codec.ts";
 import { ServerCodec } from "../src/network/server-codec.ts";
-import { AttributeType } from "../src/network/enums.ts";
+import { AttributeType, PacketIds } from "../src/network/enums.ts";
 import type { EnterWorldData, EntityData } from "../src/shared/packets.ts";
+
+test("mini codec appends the event password after enter-world solver bytes", () => {
+  const packet = new MiniCodec().encode(PacketIds.PACKET_ENTER_WORLD, {
+    displayName: "EventPlayer",
+    extra: Uint8Array.of(11, 22, 33).buffer,
+    password: "dandelion-event",
+  });
+  const buffer = ByteBuffer.wrap(packet).LE();
+
+  expect(buffer.readUint8()).toBe(PacketIds.PACKET_ENTER_WORLD);
+  expect(buffer.readVString()).toBe("EventPlayer");
+  expect([
+    buffer.readUint8(),
+    buffer.readUint8(),
+    buffer.readUint8(),
+  ]).toEqual([11, 22, 33]);
+  expect(buffer.readVString()).toBe("dandelion-event");
+  expect(buffer.remaining()).toBe(0);
+});
 
 test("mini codec keeps entity UID tables in sorted typed arrays", () => {
   const server = new ServerCodec({

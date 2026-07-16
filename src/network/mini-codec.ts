@@ -362,6 +362,10 @@ class MiniCodec {
     for (let i = 0; i < item.extra.byteLength; i++) {
       buffer.writeUint8(extra[i] ?? 0);
     }
+
+    if (item.password !== undefined) {
+      buffer.writeVString(item.password);
+    }
   }
 
   encodeInput(buffer: ByteBuffer, item: InputPacketData): void {

@@ -89,6 +89,7 @@ The request fields are:
 | `automations` | Yes | Array | Automation IDs to enable for this session; use `[]` to start with all disabled |
 | `psk` | No | Exactly 20 ASCII letters | Automatically joins that party share key after entering the world |
 | `password` | No | 8 to 32 characters | Protects attachment, automation management, and deletion |
+| `eventPassword` | No | String | Appended to the game server's opcode `4` enter-world request for password-gated events |
 
 For example, a protected session that joins an existing party is created with:
 
