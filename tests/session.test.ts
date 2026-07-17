@@ -10,9 +10,11 @@ import type {
   SyncData,
 } from "../src/shared/ipc.ts";
 import type {
+  EntityData,
   EnterWorldData,
   RpcData,
   RpcMapEntry,
+  RpcObject,
 } from "../src/shared/packets.ts";
 import { readEntityTick, Session } from "../src/session/session.ts";
 
@@ -28,6 +30,14 @@ interface SessionTestHarness {
   enterWorld?: EnterWorldData;
   latestTick?: number;
   singleRpcPackets: Record<string, ArrayBuffer>;
+  buildingSchema: Readonly<Record<string, unknown>>;
+  localBuildingsByUid: Map<number, RpcObject>;
+  entitySnapshot: Map<number, EntityData>;
+  automationManager: {
+    context: {
+      readSessionState(): Readonly<Record<string, unknown>>;
+    };
+  };
   chatPackets: ArrayBuffer[];
   virtualInventory: Map<string, Record<string, number | string>>;
   synthesizeSyncPackets(): SyncData | undefined;
@@ -37,6 +47,105 @@ interface SessionTestHarness {
   recordRpcPacket(packet: RpcData, data: ArrayBuffer): void;
   sendConfiguredPsk(): void;
 }
+
+test("session parses BuildingShopPrices for automations while retaining sync data", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const schema = {
+    Wall: {
+      woodCosts: [0, 10],
+      stoneCosts: [0, 5],
+      goldCosts: [0, 0],
+    },
+  };
+  const data = packet(17);
+
+  session.recordRpcPacket(
+    {
+      name: "BuildingShopPrices",
+      response: { json: JSON.stringify(schema) },
+    },
+    data,
+  );
+
+  expect(session.buildingSchema).toEqual(schema);
+  expect(new Uint8Array(session.singleRpcPackets.BuildingShopPrices!)).toEqual(
+    new Uint8Array(data),
+  );
+});
+
+test("session keeps the last valid building schema after malformed updates", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const schema = {
+    Wall: {
+      woodCosts: [0, 10],
+      stoneCosts: [0, 5],
+      goldCosts: [0, 0],
+    },
+  };
+
+  session.recordRpcPacket(
+    {
+      name: "BuildingShopPrices",
+      response: { json: JSON.stringify(schema) },
+    },
+    packet(17),
+  );
+  session.recordRpcPacket(
+    {
+      name: "BuildingShopPrices",
+      response: { json: "[\"not\",\"a\",\"schema\"]" },
+    },
+    packet(17),
+  );
+  session.recordRpcPacket(
+    {
+      name: "BuildingShopPrices",
+      response: { json: "{invalid json" },
+    },
+    packet(17),
+  );
+
+  expect(session.buildingSchema).toEqual(schema);
+});
+
+test("session exposes owned buildings with entity yaw to automations", () => {
+  const session = new Session({
+    sessionId: "session",
+    sessionName: "test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  session.localBuildingsByUid.set(10, {
+    uid: 10,
+    type: "MeleeTower",
+    x: 48,
+    y: 96,
+    tier: 4,
+    dead: 0,
+  });
+  session.entitySnapshot.set(10, { uid: 10, yaw: 270 });
+
+  const state = session.automationManager.context.readSessionState();
+
+  expect(state.buildings).toEqual([
+    {
+      uid: 10,
+      type: "MeleeTower",
+      x: 48,
+      y: 96,
+      tier: 4,
+      dead: 0,
+      yaw: 270,
+    },
+  ]);
+});
 
 test("session health uses the Engine-provided identity and name", () => {
   const session = new Session({
@@ -106,6 +215,24 @@ test("session automation IPC returns defaults, applies settings immediately, and
             status: "disabled",
             settings: {},
           },
+          {
+            id: "autoRebuilder",
+            enabled: false,
+            status: "disabled",
+            settings: {},
+          },
+          {
+            id: "autoUpgrader",
+            enabled: false,
+            status: "disabled",
+            settings: {},
+          },
+          {
+            id: "aulht",
+            enabled: false,
+            status: "disabled",
+            settings: {},
+          },
         ],
       },
     });
@@ -135,6 +262,9 @@ test("session automation IPC returns defaults, applies settings immediately, and
             status: "running",
             settings: { players: false, zombies: true, npcs: true },
           },
+          {},
+          {},
+          {},
           {},
         ],
       },

@@ -86,6 +86,7 @@ export class Session {
   private readonly singleRpcPackets: Partial<Record<SingleSyncRpcName, ArrayBuffer>> = {};
   private readonly chatPackets: ArrayBuffer[] = [];
   private readonly localBuildingsByUid = new Map<number, RpcObject>();
+  private buildingSchema: Readonly<Record<string, unknown>> = Object.freeze({});
   private readonly virtualInventory = new Map<string, RpcObject>();
   private healthWrites = Promise.resolve();
   private automationWrites = Promise.resolve();
@@ -566,6 +567,10 @@ export class Session {
       return;
     }
 
+    if (packet.name === "BuildingShopPrices") {
+      this.recordBuildingSchema(packet.response);
+    }
+
     if (singleSyncRpcNames.includes(packet.name as SingleSyncRpcName)) {
       this.singleRpcPackets[packet.name as SingleSyncRpcName] = clonePacket(data);
     }
@@ -600,6 +605,24 @@ export class Session {
       }
 
       this.virtualInventory.set(itemName, { ...item });
+    }
+  }
+
+  private recordBuildingSchema(response: RpcData["response"]): void {
+    if (Array.isArray(response) || typeof response.json !== "string") return;
+
+    try {
+      const schema: unknown = JSON.parse(response.json);
+      if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+        return;
+      }
+      this.buildingSchema = Object.freeze(
+        structuredClone(schema as Record<string, unknown>),
+      );
+    } catch (error) {
+      logger.warn("Failed to parse BuildingShopPrices", {
+        error: getErrorMessage(error),
+      });
     }
   }
 
@@ -725,6 +748,22 @@ export class Session {
                 }),
               ),
             ),
+            buildings: Object.freeze(
+              structuredClone([...this.localBuildingsByUid.values()]).map(
+                (building) => {
+                  const uid = building.uid;
+                  const entity = typeof uid === "number"
+                    ? this.entitySnapshot.get(uid)
+                    : undefined;
+                  const yaw = entity?.yaw;
+                  return Object.freeze({
+                    ...building,
+                    ...(typeof yaw === "number" ? { yaw } : {}),
+                  });
+                },
+              ),
+            ),
+            buildingSchema: Object.freeze(structuredClone(this.buildingSchema)),
           }),
         sendInput: (input) => {
           if (this.health.status !== "in-world") return;

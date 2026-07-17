@@ -31,9 +31,36 @@ test("automation catalog exposes default-on checkboxes and narrow ownership", ()
       settings: {},
       error: null,
     },
+    autoRebuilder: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoUpgrader: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    aulht: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
   });
   expect(AutomationCatalog.autoAim.ownership.inputFields).not.toContain("up");
   expect(AutomationCatalog.autoAim.ownership.inputFields).not.toContain("left");
+  expect(AutomationCatalog.autoRebuilder.ownership.rpcNames).toEqual([
+    "MakeBuilding",
+    "UpgradeBuilding",
+  ]);
+  expect(AutomationCatalog.autoUpgrader.ownership.rpcNames).toEqual([
+    "UpgradeBuilding",
+  ]);
+  expect(AutomationCatalog.aulht).toMatchObject({
+    label: "AULHT",
+    implemented: true,
+    settings: [],
+  });
 });
 
 test("Auto Bow releases and presses space on every entity update", async () => {
@@ -58,6 +85,173 @@ test("Auto Bow releases and presses space on every entity update", async () => {
     { space: 0 },
     { space: 1 },
   ]);
+});
+
+test("building automations act independently on the same structure", async () => {
+  const rpcs: Array<{
+    name: string;
+    payload: Readonly<Record<string, unknown>>;
+  }> = [];
+  let buildings = [
+    { uid: 10, type: "GoldStash", x: 0, y: 0, tier: 8 },
+    { uid: 11, type: "Wall", x: 48, y: 48, tier: 3 },
+  ];
+  const entities = [
+    { uid: 1, wood: 100, stone: 100, gold: 100 },
+    { uid: 11, health: 10, maxHealth: 100 },
+  ];
+  const manager = new AutomationManager({
+    context: {
+      readSessionState: () => ({
+        playerUid: 1,
+        entities,
+        buildings,
+        buildingSchema: {
+          Wall: {
+            woodCosts: [0, 10],
+            stoneCosts: [0, 10],
+            goldCosts: [0, 0],
+          },
+        },
+      }),
+      sendInput: () => {},
+      sendRpc: (name, payload) => rpcs.push({ name, payload }),
+    },
+  });
+
+  await manager.setEnabled("autoRebuilder", true);
+  await manager.setEnabled("autoUpgrader", true);
+  await manager.setEnabled("aulht", true);
+  buildings = [
+    { uid: 10, type: "GoldStash", x: 0, y: 0, tier: 8 },
+    { uid: 11, type: "Wall", x: 48, y: 48, tier: 1 },
+  ];
+  manager.handleEntityUpdate();
+
+  expect(rpcs).toEqual([
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
+  ]);
+});
+
+test("AutoAim sends full aim input to the nearest enabled target", async () => {
+  const inputs: Readonly<Record<string, unknown>>[] = [];
+  const entities = [
+    {
+      uid: 1,
+      model: "Player",
+      partyId: 7,
+      dead: 0,
+      position: { x: 100, y: 200 },
+    },
+    {
+      uid: 2,
+      model: "PlayerObject",
+      partyId: 7,
+      dead: 0,
+      position: { x: 101, y: 200 },
+    },
+    {
+      uid: 3,
+      model: "GamePlayer",
+      partyId: 8,
+      dead: 0,
+      position: { x: 400, y: 200 },
+    },
+    { uid: 4, model: "Zombie", position: { x: 200, y: 200 } },
+    { uid: 5, model: "NeutralTier1", position: { x: 130, y: 240 } },
+  ];
+  const manager = new AutomationManager({
+    context: {
+      readSessionState: () => ({ playerUid: 1, entities }),
+      sendInput: (input) => inputs.push(input),
+      sendRpc: () => {},
+    },
+  });
+
+  await manager.setEnabled("autoAim", true);
+  manager.handleEntityUpdate();
+
+  expect(inputs).toHaveLength(1);
+  expect(inputs[0]).toMatchObject({
+    mouseMoved: 143,
+    worldX: 3000,
+    worldY: 4000,
+    distance: 50,
+  });
+});
+
+test("AutoAim normalizes rounded yaw into the accepted input range", async () => {
+  const inputs: Readonly<Record<string, unknown>>[] = [];
+  const entities = [
+    {
+      uid: 1,
+      model: "Player",
+      dead: 0,
+      position: { x: 0, y: 0 },
+    },
+    { uid: 2, model: "Zombie", position: { x: -0.5, y: -100 } },
+  ];
+  const manager = new AutomationManager({
+    context: {
+      readSessionState: () => ({ playerUid: 1, entities }),
+      sendInput: (input) => inputs.push(input),
+      sendRpc: () => {},
+    },
+  });
+
+  await manager.setEnabled("autoAim", true);
+  manager.handleEntityUpdate();
+
+  expect(inputs[0]).toMatchObject({ mouseMoved: 0 });
+});
+
+test("AutoAim respects settings, range, and inactive player state", async () => {
+  const inputs: Readonly<Record<string, unknown>>[] = [];
+  let entities: Readonly<Record<string, unknown>>[] = [
+    {
+      uid: 1,
+      model: "Player",
+      partyId: 7,
+      dead: 0,
+      position: { x: 0, y: 0 },
+    },
+    { uid: 2, model: "NeutralTier1", position: { x: 10, y: 0 } },
+    { uid: 3, model: "ZombieBoss", position: { x: 0, y: 500 } },
+    {
+      uid: 4,
+      model: "Player",
+      partyId: 8,
+      dead: 0,
+      position: { x: 0, y: 551 },
+    },
+  ];
+  const manager = new AutomationManager({
+    context: {
+      readSessionState: () => ({ playerUid: 1, entities }),
+      sendInput: (input) => inputs.push(input),
+      sendRpc: () => {},
+    },
+  });
+
+  await manager.applyUpdate("autoAim", {
+    enabled: true,
+    settings: { players: true, zombies: true, npcs: false },
+  });
+  manager.handleEntityUpdate();
+  expect(inputs[0]).toMatchObject({
+    mouseMoved: 180,
+    worldX: 0,
+    worldY: 50000,
+    distance: 500,
+  });
+
+  entities = entities.map((entity) =>
+    entity.uid === 1 ? { ...entity, dead: 1 } : entity,
+  );
+  manager.handleEntityUpdate();
+  expect(inputs).toHaveLength(1);
 });
 
 test("automation views combine catalog fields with live state", async () => {
@@ -169,6 +363,21 @@ test("saved automation state is normalized against current defaults", () => {
       error: null,
     },
     autoBow: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoRebuilder: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoUpgrader: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    aulht: {
       enabled: false,
       settings: {},
       error: null,

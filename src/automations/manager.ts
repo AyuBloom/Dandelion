@@ -12,7 +12,11 @@ import {
   parseAutomationUpdate,
 } from "./automations.ts";
 import { createAhrcAutomation } from "./ahrc.ts";
+import { createAulhtAutomation } from "./aulht.ts";
+import { createAutoAimAutomation } from "./auto-aim.ts";
 import { createAutoBowAutomation } from "./auto-bow.ts";
+import { createAutoRebuilderAutomation } from "./auto-rebuilder.ts";
+import { createAutoUpgraderAutomation } from "./auto-upgrader.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 export type AutomationTimer = ReturnType<typeof setTimeout>;
@@ -51,8 +55,11 @@ export type AutomationFactory = (
 
 export const DefaultAutomationFactories: Record<AutomationId, AutomationFactory> = {
   ahrc: createAhrcAutomation,
-  autoAim: () => ({}),
+  autoAim: createAutoAimAutomation,
   autoBow: createAutoBowAutomation,
+  autoRebuilder: createAutoRebuilderAutomation,
+  autoUpgrader: createAutoUpgraderAutomation,
+  aulht: createAulhtAutomation,
 };
 
 export interface AutomationManagerOptions {

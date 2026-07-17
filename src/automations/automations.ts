@@ -1,4 +1,11 @@
-export const AvailableAutomations = ["ahrc", "autoAim", "autoBow"] as const;
+export const AvailableAutomations = [
+  "ahrc",
+  "autoAim",
+  "autoBow",
+  "autoRebuilder",
+  "autoUpgrader",
+  "aulht",
+] as const;
 
 export type AutomationId = (typeof AvailableAutomations)[number];
 
@@ -14,11 +21,17 @@ export interface AutoAimSettings {
 }
 
 export type AutoBowSettings = Record<never, never>;
+export type AutoRebuilderSettings = Record<never, never>;
+export type AutoUpgraderSettings = Record<never, never>;
+export type AulhtSettings = Record<never, never>;
 
 export interface AutomationSettingsById {
   ahrc: AhrcSettings;
   autoAim: AutoAimSettings;
   autoBow: AutoBowSettings;
+  autoRebuilder: AutoRebuilderSettings;
+  autoUpgrader: AutoUpgraderSettings;
+  aulht: AulhtSettings;
 }
 
 export type AutomationSettings = AutomationSettingsById[AutomationId];
@@ -69,9 +82,9 @@ export const AutomationCatalog = {
   },
   autoAim: {
     id: "autoAim",
-    label: "AutoAim",
+    label: "Auto Aim",
     description: "Aim at selected targets while preserving unrelated input.",
-    implemented: false,
+    implemented: true,
     settings: [
       {
         key: "players",
@@ -112,6 +125,39 @@ export const AutomationCatalog = {
     ownership: {
       inputFields: ["space"],
       rpcNames: [],
+    },
+  },
+  autoRebuilder: {
+    id: "autoRebuilder",
+    label: "Auto Rebuilder",
+    description: "Rebuild captured structures and restore their original tiers.",
+    implemented: true,
+    settings: [],
+    ownership: {
+      inputFields: [],
+      rpcNames: ["MakeBuilding", "UpgradeBuilding"],
+    },
+  },
+  autoUpgrader: {
+    id: "autoUpgrader",
+    label: "Auto Upgrader",
+    description: "Upgrade the Gold Stash first, then other owned structures.",
+    implemented: true,
+    settings: [],
+    ownership: {
+      inputFields: [],
+      rpcNames: ["UpgradeBuilding"],
+    },
+  },
+  aulht: {
+    id: "aulht",
+    label: "AULHT",
+    description: "Upgrade owned structures at or below 20% health.",
+    implemented: true,
+    settings: [],
+    ownership: {
+      inputFields: [],
+      rpcNames: ["UpgradeBuilding"],
     },
   },
 } as const satisfies Record<AutomationId, AutomationDefinition>;
@@ -171,6 +217,21 @@ export function createDefaultAutomationState(): AutomationState {
       error: null,
     },
     autoBow: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoRebuilder: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoUpgrader: {
+      enabled: false,
+      settings: {},
+      error: null,
+    },
+    aulht: {
       enabled: false,
       settings: {},
       error: null,

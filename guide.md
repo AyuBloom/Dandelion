@@ -108,6 +108,30 @@ curl --fail-with-body --silent --show-error \
   }'
 ```
 
+### Normal and event starter scripts
+
+Dandelion provides two Tampermonkey userscripts in `client/`:
+
+| Script | Use it for | Enter-world behavior |
+| --- | --- | --- |
+| [`starter-script.user.js`](client/starter-script.user.js) | Normal ZOMBS.io servers | Sends the standard opcode `4` request without an event password |
+| [`event-starter-script.user.js`](client/event-starter-script.user.js) | Password-gated event servers | Adds an **Event password** field and appends its value to opcode `4` with `writeVString` |
+
+The event script otherwise has the same session, host, attachment, and
+automation controls as the normal script. Its **Session password** and **Event
+password** fields have different purposes:
+
+- **Session password** is optional and protects the saved Dandelion session,
+  including attachment, automation management, and deletion. It becomes the
+  API's `password` field.
+- **Event password** is sent to the selected ZOMBS.io game server only while
+  entering the world. It becomes the API's `eventPassword` field and is not
+  remembered by the userscript.
+
+Leave **Event password** empty when the selected server does not require it.
+Enable only one starter userscript at a time; both scripts install the same
+Dandelion overlay and are intended as alternatives.
+
 HTTP `202` means the session process was started. It does not guarantee that the
 game server will admit the player. Check the session status next.
 
@@ -218,9 +242,13 @@ Every automation starts disabled unless its ID is included in the
 `automations` creation field. Settings apply immediately, remain active without
 listeners, and are owned by the session process. AHRC reacts to entity updates
 and services every Harvester owned by the session player's party. Auto Bow
-releases and presses the bow input on every entity update. AutoAim is still a
-mock: its enabled state and settings persist, but it does not perform game
-actions yet.
+releases and presses the bow input on every entity update. AutoAim is a
+session-owned automation: it aims at the nearest enabled target within 550
+world units without firing automatically. Auto Rebuilder captures the current
+base when enabled, rebuilds missing structures, and restores their captured
+tiers for the lifetime of the session process. Auto Upgrader prioritizes the
+Gold Stash before upgrading other structures. AULHT upgrades owned structures
+other than the Gold Stash when their health reaches 20% or lower.
 
 Protected sessions require a fresh one-time token in `?token=...` for every GET
 or PATCH request.
