@@ -46,7 +46,7 @@ test("AULHT upgrades every low-health owned structure below the stash tier", () 
   ]);
 });
 
-test("AULHT sends again on every entity update while health remains low", () => {
+test("AULHT upgrades only once while a structure remains low health", () => {
   const { lifecycle, rpcs } = createHarness({
     buildings: [
       { uid: 1, type: "GoldStash", tier: 3 },
@@ -56,6 +56,27 @@ test("AULHT sends again on every entity update while health remains low", () => 
   });
 
   lifecycle.onEntityUpdate?.();
+  lifecycle.onEntityUpdate?.();
+
+  expect(rpcs).toEqual([
+    { name: "UpgradeBuilding", payload: { uid: 2 } },
+  ]);
+});
+
+test("AULHT can upgrade once again after the structure recovers", () => {
+  const state = {
+    buildings: [
+      { uid: 1, type: "GoldStash", tier: 4 },
+      { uid: 2, type: "Wall", tier: 1 },
+    ],
+    entities: [{ uid: 2, health: 10, maxHealth: 100 }],
+  };
+  const { lifecycle, rpcs } = createHarness(state);
+
+  lifecycle.onEntityUpdate?.();
+  state.entities[0]!.health = 100;
+  lifecycle.onEntityUpdate?.();
+  state.entities[0]!.health = 10;
   lifecycle.onEntityUpdate?.();
 
   expect(rpcs).toEqual([

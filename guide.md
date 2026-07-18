@@ -247,8 +247,10 @@ session-owned automation: it aims at the nearest enabled target within 550
 world units without firing automatically. Auto Rebuilder captures the current
 base when enabled, rebuilds missing structures, and restores their captured
 tiers for the lifetime of the session process. Auto Upgrader prioritizes the
-Gold Stash before upgrading other structures. AULHT upgrades owned structures
-other than the Gold Stash when their health reaches 20% or lower.
+Gold Stash, then continues checking other structures by UID without stopping on
+max-tier or unaffordable buildings. AULHT upgrades owned structures other than
+the Gold Stash once when their health reaches 20% or lower. It can trigger again
+after the structure recovers above 20%.
 
 Protected sessions require a fresh one-time token in `?token=...` for every GET
 or PATCH request.

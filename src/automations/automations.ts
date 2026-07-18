@@ -141,7 +141,7 @@ export const AutomationCatalog = {
   autoUpgrader: {
     id: "autoUpgrader",
     label: "Auto Upgrader",
-    description: "Upgrade the Gold Stash first, then other owned structures.",
+    description: "Check the Gold Stash first, then other structures by UID.",
     implemented: true,
     settings: [],
     ownership: {
@@ -152,7 +152,7 @@ export const AutomationCatalog = {
   aulht: {
     id: "aulht",
     label: "AULHT",
-    description: "Upgrade owned structures at or below 20% health.",
+    description: "Upgrade owned structures once when they reach 20% health.",
     implemented: true,
     settings: [],
     ownership: {

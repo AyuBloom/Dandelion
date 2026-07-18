@@ -26,13 +26,13 @@ const buildingSchema = {
   },
 };
 
-test("Auto Upgrader upgrades only the Gold Stash until it reaches tier 8", async () => {
+test("Auto Upgrader checks the Gold Stash first, then continues by UID", async () => {
   const { lifecycle, rpcs } = harness({
     playerUid: 1,
     entities: [{ uid: 1, wood: 100, stone: 100, gold: 100 }],
     buildings: [
+      { uid: 11, type: "ArrowTower", tier: 1, x: 10, y: 10 },
       { uid: 10, type: "GoldStash", tier: 2, x: 0, y: 0 },
-      { uid: 11, type: "ArrowTower", tier: 2, x: 10, y: 10 },
     ],
     buildingSchema,
   });
@@ -41,10 +41,11 @@ test("Auto Upgrader upgrades only the Gold Stash until it reaches tier 8", async
 
   expect(rpcs).toEqual([
     { name: "UpgradeBuilding", payload: { uid: 10 } },
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
   ]);
 });
 
-test("Auto Upgrader saves resources when the Gold Stash upgrade is unaffordable", async () => {
+test("Auto Upgrader falls back when the Gold Stash upgrade is unaffordable", async () => {
   const { lifecycle, rpcs } = harness({
     playerUid: 1,
     entities: [{ uid: 1, wood: 19, stone: 100, gold: 100 }],
@@ -57,7 +58,29 @@ test("Auto Upgrader saves resources when the Gold Stash upgrade is unaffordable"
 
   await lifecycle.onEntityUpdate?.();
 
-  expect(rpcs).toEqual([]);
+  expect(rpcs).toEqual([
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
+  ]);
+});
+
+test("Auto Upgrader falls back when the Gold Stash costs are unavailable", async () => {
+  const { lifecycle, rpcs } = harness({
+    playerUid: 1,
+    entities: [{ uid: 1, wood: 100, stone: 100, gold: 100 }],
+    buildings: [
+      { uid: 10, type: "GoldStash", tier: 3 },
+      { uid: 11, type: "Wall", tier: 1 },
+    ],
+    buildingSchema: {
+      Wall: buildingSchema.Wall,
+    },
+  });
+
+  await lifecycle.onEntityUpdate?.();
+
+  expect(rpcs).toEqual([
+    { name: "UpgradeBuilding", payload: { uid: 11 } },
+  ]);
 });
 
 test("Auto Upgrader upgrades affordable non-stash structures without overspending", async () => {
@@ -77,6 +100,26 @@ test("Auto Upgrader upgrades affordable non-stash structures without overspendin
 
   expect(rpcs).toEqual([
     { name: "UpgradeBuilding", payload: { uid: 11 } },
+  ]);
+});
+
+test("Auto Upgrader skips max-tier and unaffordable buildings without stopping", async () => {
+  const { lifecycle, rpcs } = harness({
+    playerUid: 1,
+    entities: [{ uid: 1, wood: 15, stone: 10, gold: 0 }],
+    buildings: [
+      { uid: 14, type: "Wall", tier: 1 },
+      { uid: 12, type: "ArrowTower", tier: 2 },
+      { uid: 13, type: "Wall", tier: 8 },
+      { uid: 10, type: "GoldStash", tier: 8 },
+    ],
+    buildingSchema,
+  });
+
+  await lifecycle.onEntityUpdate?.();
+
+  expect(rpcs).toEqual([
+    { name: "UpgradeBuilding", payload: { uid: 14 } },
   ]);
 });
 

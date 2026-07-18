@@ -41,22 +41,20 @@ function runAutoUpgraderTick(context: AutomationContext): void {
   const stash = buildings.find((building) => building.type === GOLD_STASH);
   if (!stash) return;
 
-  if (stash.tier < MAX_BUILDING_TIER) {
-    upgradeIfAffordable(context, stash, buildingSchema, resources);
-    return;
-  }
-
+  buildings.sort(compareBuildingOrder);
   for (const building of buildings) {
-    if (
-      building.type === GOLD_STASH ||
-      building.tier >= MAX_BUILDING_TIER ||
-      building.tier >= stash.tier
-    ) {
-      continue;
-    }
+    const isGoldStash = building.type === GOLD_STASH;
+    if (building.tier >= MAX_BUILDING_TIER) continue;
+    if (!isGoldStash && building.tier >= stash.tier) continue;
 
     upgradeIfAffordable(context, building, buildingSchema, resources);
   }
+}
+
+function compareBuildingOrder(left: Building, right: Building): number {
+  if (left.type === GOLD_STASH) return right.type === GOLD_STASH ? 0 : -1;
+  if (right.type === GOLD_STASH) return 1;
+  return left.uid - right.uid;
 }
 
 function upgradeIfAffordable(
