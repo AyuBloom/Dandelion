@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { Socket, Subprocess, UnixSocketListener } from "bun";
@@ -26,6 +26,14 @@ import {
   type SessionControlSocketData,
   writeSessionControlFrame,
 } from "../shared/session-control.ts";
+import {
+  getSessionRescuePath,
+  readSessionRescueFrames,
+  SESSION_RESCUE_DIRECTORY,
+  type SessionRescueFrame,
+  type SessionRescueSocketData,
+  writeSessionRescueFrame,
+} from "../shared/session-rescue.ts";
 import type {
   ClientRpcData,
   EntityData,
@@ -35,7 +43,7 @@ import type {
   RpcObject,
 } from "../shared/packets.ts";
 import MiniCodec from "../network/mini-codec.ts";
-import { parseListenerInput } from "./input.ts";
+import { parseInputPacketData, parseListenerInput } from "./input.ts";
 import { isValidListenerRpc, MAX_RPC_PACKET_BYTES } from "./rpc.ts";
 
 export interface SessionOptions {
@@ -77,6 +85,7 @@ export class Session {
   private readonly health: SessionHealth;
   private durableConnection?: Subprocess;
   private controlServer?: UnixSocketListener<SessionControlSocketData>;
+  private rescueServer?: UnixSocketListener<SessionRescueSocketData>;
   private clientCodec: MiniCodec;
   private serverCodec: ServerCodec;
   private enterWorld?: EnterWorldData;
@@ -124,6 +133,7 @@ export class Session {
     this.queueAutomationWrite(this.automationManager.getState());
     await this.automationWrites;
     await this.startControlServer();
+    await this.startRescueServer();
     await this.writeHealth();
 
     this.durableConnection = this.startDurableConnection();
@@ -151,6 +161,7 @@ export class Session {
         status: this.health.status,
       },
     } satisfies IpcMessage);
+    await this.stopRescueServer();
     await this.stopControlServer();
 
     logger.info(feedback.sessionStopped, {
@@ -237,6 +248,33 @@ export class Session {
     });
   }
 
+  private async startRescueServer(): Promise<void> {
+    await mkdir(SESSION_RESCUE_DIRECTORY, { recursive: true });
+    await rm(this.rescuePath(), { force: true });
+
+    this.rescueServer = Bun.listen<SessionRescueSocketData>({
+      unix: this.rescuePath(),
+      socket: {
+        open: (socket) => {
+          socket.data = { buffer: "" };
+        },
+        data: (socket, data) => {
+          socket.data.buffer = readSessionRescueFrames(
+            socket.data.buffer,
+            data,
+            (frame) => this.handleRescueFrame(socket, frame),
+          );
+        },
+        error: (_, error) => {
+          logger.warn("Session rescue socket error", {
+            error: getErrorMessage(error),
+          });
+        },
+      },
+    });
+    await chmod(this.rescuePath(), 0o600);
+  }
+
   private readonly shutdown = (signal: SessionControlSignal = "SIGTERM") => {
     this.durableConnection?.kill(signal);
   };
@@ -252,6 +290,39 @@ export class Session {
       default:
         break;
     }
+  }
+
+  private handleRescueFrame(
+    socket: Socket<SessionRescueSocketData>,
+    frame: SessionRescueFrame,
+  ): void {
+    if (frame.type !== "input") return;
+
+    const result = this.handleRescueInput(frame.input);
+    writeSessionRescueFrame(socket, {
+      type: "result",
+      ...result,
+    });
+  }
+
+  private handleRescueInput(
+    value: unknown,
+  ): { ok: true } | { ok: false; error: string } {
+    const input = parseInputPacketData(value);
+    if (!input) return { ok: false, error: "Invalid input" };
+    if (!this.canForwardListenerInput()) {
+      return { ok: false, error: "Session is not in-world" };
+    }
+
+    const sent = this.sendToDurable({
+      type: "session.input",
+      from: "session",
+      to: "durable-connection",
+      payload: input,
+    } satisfies IpcMessage);
+    return sent
+      ? { ok: true }
+      : { ok: false, error: "Durable connection is unavailable" };
   }
 
   private readonly handleDurableIPC = (message: IpcMessage): void => {
@@ -887,6 +958,10 @@ export class Session {
     return getSessionControlPath(this.health.sessionId);
   }
 
+  private rescuePath(): string {
+    return getSessionRescuePath(this.health.sessionId);
+  }
+
   private sendToEngine(message: IpcMessage): void {
     try {
       parent.send?.(message);
@@ -918,6 +993,12 @@ export class Session {
     this.controlServer?.stop(true);
     this.controlServer = undefined;
     await rm(this.controlPath(), { force: true });
+  }
+
+  private async stopRescueServer(): Promise<void> {
+    this.rescueServer?.stop(true);
+    this.rescueServer = undefined;
+    await rm(this.rescuePath(), { force: true });
   }
 }
 

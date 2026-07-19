@@ -181,7 +181,40 @@ Common status values are:
 Wait for `in-world` before attaching a client. A failed or closed session is
 removed from the active list; inspect the Dandelion terminal for the reason.
 
-## 5. Authenticate a protected session
+## 5. Rescue a session from the CLI
+
+Each session process exposes a local owner-only rescue socket. It sends validated
+input directly from the session process to its durable game connection, so it
+also works while the API/engine process is being restarted.
+
+List running sessions:
+
+```bash
+bun run rescue list
+```
+
+Open the interactive rescue prompt by session ID, ID prefix, or exact name:
+
+```bash
+bun run rescue 8ec0eabe
+```
+
+With no target, `bun run rescue` shows a numbered picker. The prompt accepts
+`up`, `down off`, `space on`, `respawn`, `stop`, and raw input such as
+`send {"up":1,"right":1}`. Run `help` inside the prompt for the full list.
+Movement and space are released automatically when the interactive prompt exits.
+An optional command after the target runs as a 100 ms tap and then releases:
+
+```bash
+bun run rescue 8ec0eabe respawn
+```
+
+The rescue socket is local operating-system access, so the HTTP session password
+is not used. Sessions started by an older Dandelion process do not gain a rescue
+socket until their next normal start; do not restart a healthy live session only
+to enable this feature.
+
+## 6. Authenticate a protected session
 
 Public sessions do not need authentication. For a password-protected session,
 exchange the password for a token:
@@ -214,7 +247,7 @@ A token:
 Request a fresh token for each protected operation. Five failed password
 attempts from one client within 60 seconds temporarily produce HTTP `429`.
 
-## 6. Manage session automations
+## 7. Manage session automations
 
 Read the automation catalog and current state for a public session:
 
@@ -255,7 +288,7 @@ after the structure recovers above 20%.
 Protected sessions require a fresh one-time token in `?token=...` for every GET
 or PATCH request.
 
-## 7. Attach a game client
+## 8. Attach a game client
 
 The listener address for a public session is:
 
@@ -321,7 +354,7 @@ ZOMBS.io disconnection constraint documented by the
 Multiple listeners may watch and control the same public session. Valid input
 and RPC packets from every live listener are forwarded immediately.
 
-## 8. Stop a session safely
+## 9. Stop a session safely
 
 Stop a public session:
 

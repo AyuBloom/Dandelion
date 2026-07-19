@@ -40,7 +40,9 @@ export function parseListenerInput(
   }
 }
 
-function parseInputPacketData(value: unknown): InputPacketData | undefined {
+export function parseInputPacketData(
+  value: unknown,
+): InputPacketData | undefined {
   const input = (value ?? {}) as Record<string, unknown>;
   const entries = Object.entries(input);
   if (entries.length === 0) return undefined;

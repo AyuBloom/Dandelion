@@ -95,13 +95,13 @@ test("fresh entity updates preserve sparse entity attributes", () => {
   });
 });
 
-test("server codec accepts fractional wood, stone, and gold values", () => {
+test("server codec preserves fractional resources beyond the Int32 fixed-point range", () => {
   const server = new ServerCodec({
     attributeMaps: {
       1: [
         { name: "wood", type: AttributeType.Double },
         { name: "stone", type: AttributeType.Double },
-        { name: "gold", type: AttributeType.Int32 },
+        { name: "gold", type: AttributeType.Double },
       ],
     },
     entityTypeNames: {
@@ -111,14 +111,12 @@ test("server codec accepts fractional wood, stone, and gold values", () => {
   const client = new MiniCodec();
 
   client.decode(server.encodeEnterWorldResponse(enterWorldData()));
-  expect(client.attributeMaps[1]?.[2]?.type).toBe(AttributeType.Double);
-
   const update = client.decode(server.encodeFreshEntityUpdate({
     tick: 1,
     entities: [{
       uid: 5,
       entityType: 1,
-      wood: 10.5,
+      wood: 30_000_000.5,
       stone: 20.25,
       gold: 30.75,
     }],
@@ -126,7 +124,7 @@ test("server codec accepts fractional wood, stone, and gold values", () => {
 
   expect("entities" in update ? update.entities.get(5) : undefined).toEqual({
     uid: 5,
-    wood: 10.5,
+    wood: 30_000_000.5,
     stone: 20.25,
     gold: 30.75,
   });

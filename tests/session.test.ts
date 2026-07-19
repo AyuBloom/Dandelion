@@ -43,6 +43,9 @@ interface SessionTestHarness {
   synthesizeSyncPackets(): SyncData | undefined;
   synthesizeRpcPackets(): ArrayBuffer[];
   handleEngineIPC(message: IpcMessage): void;
+  handleRescueInput(
+    value: unknown,
+  ): { ok: true } | { ok: false; error: string };
   forwardDurablePacket(data: ArrayBuffer): void;
   recordRpcPacket(packet: RpcData, data: ArrayBuffer): void;
   sendConfiguredPsk(): void;
@@ -156,6 +159,39 @@ test("session health uses the Engine-provided identity and name", () => {
 
   expect(session.health.sessionId).toBe("session-id");
   expect(session.health.sessionName).toBe("test-session");
+});
+
+test("session rescue input uses the direct validated durable path", () => {
+  const session = new Session({
+    sessionId: "session-id",
+    sessionName: "rescue-test",
+    ...serverAddress(),
+  }) as unknown as SessionTestHarness;
+  const sent: IpcMessage[] = [];
+  session.durableConnection = {
+    send: (message) => sent.push(message as IpcMessage),
+  };
+
+  expect(session.handleRescueInput({ up: 1 })).toEqual({
+    ok: false,
+    error: "Session is not in-world",
+  });
+  session.health.status = "in-world";
+  expect(session.handleRescueInput({ unknown: 1 })).toEqual({
+    ok: false,
+    error: "Invalid input",
+  });
+  expect(session.handleRescueInput({ up: 1, right: 1 })).toEqual({
+    ok: true,
+  });
+  expect(sent).toEqual([
+    {
+      type: "session.input",
+      from: "session",
+      to: "durable-connection",
+      payload: { up: 1, right: 1 },
+    },
+  ]);
 });
 
 test("session automation IPC returns defaults, applies settings immediately, and correlates responses", async () => {

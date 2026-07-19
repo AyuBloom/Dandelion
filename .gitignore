@@ -9,6 +9,7 @@ dist
 .session-automations/
 .session-auth/
 .session-control/
+.session-rescue/
 
 # code coverage
 coverage

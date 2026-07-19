@@ -100,7 +100,7 @@ export class ServerCodec {
 
       for (const attribute of attributeMap) {
         buffer.writeVString(attribute.name);
-        buffer.writeUint32(getWireAttributeType(attribute));
+        buffer.writeUint32(attribute.type);
       }
     }
 
@@ -324,7 +324,9 @@ function writeParameterValue(
       buffer.writeInt32(assertInt32(value, parameter.name));
       break;
     case ParameterType.Float:
-      buffer.writeInt32(toFixedHundredths(value, parameter.name));
+      buffer.writeInt32(
+        assertInt32(toFixedHundredths(value, parameter.name), parameter.name),
+      );
       break;
     case ParameterType.String:
       buffer.writeVString(String(value));
@@ -349,7 +351,7 @@ function writeAttributeValue(
     throw new DandelionError("SERVER_CODEC_ERROR", `Missing entity attribute: ${attribute.name}`);
   }
 
-  switch (getWireAttributeType(attribute)) {
+  switch (attribute.type) {
     case AttributeType.Uint32:
     case AttributeType.EntityType:
       buffer.writeUint32(assertUint32(value, attribute.name));
@@ -358,7 +360,9 @@ function writeAttributeValue(
       buffer.writeInt32(assertInt32(value, attribute.name));
       break;
     case AttributeType.Float:
-      buffer.writeInt32(toFixedHundredths(value, attribute.name));
+      buffer.writeInt32(
+        assertInt32(toFixedHundredths(value, attribute.name), attribute.name),
+      );
       break;
     case AttributeType.String:
       buffer.writeVString(String(value));
@@ -391,21 +395,14 @@ function writeAttributeValue(
       writeInt64(buffer, assertSafeInteger(value, attribute.name));
       break;
     case AttributeType.Double:
-      writeInt64(buffer, toFixedHundredths(value, attribute.name));
+      writeInt64(
+        buffer,
+        assertSafeInteger(toFixedHundredths(value, attribute.name), attribute.name),
+      );
       break;
     default:
       throw new DandelionError("SERVER_CODEC_ERROR", `Unsupported attribute type: ${attribute.type}`);
   }
-}
-
-function getWireAttributeType(attribute: AttributeMapEntry): AttributeType {
-  // Gold can be fractional even when the upstream schema advertises an integer type.
-  const isIntegerGold =
-    attribute.name === "gold" &&
-    (attribute.type === AttributeType.Int32 ||
-      attribute.type === AttributeType.Uint32);
-
-  return isIntegerGold ? AttributeType.Double : attribute.type;
 }
 
 function writeEntityAttributeFlags(
@@ -539,8 +536,12 @@ function writeVector2(
 ): void {
   const vector = assertVector2(value, context);
 
-  buffer.writeInt32(toFixedHundredths(vector.x, `${context}.x`));
-  buffer.writeInt32(toFixedHundredths(vector.y, `${context}.y`));
+  buffer.writeInt32(
+    assertInt32(toFixedHundredths(vector.x, `${context}.x`), `${context}.x`),
+  );
+  buffer.writeInt32(
+    assertInt32(toFixedHundredths(vector.y, `${context}.y`), `${context}.y`),
+  );
 }
 
 function writeVector2Array(
@@ -555,8 +556,12 @@ function writeVector2Array(
 
   buffer.writeInt32(vectors.length);
   for (const vector of vectors) {
-    buffer.writeInt32(toFixedHundredths(vector.x, `${context}.x`));
-    buffer.writeInt32(toFixedHundredths(vector.y, `${context}.y`));
+    buffer.writeInt32(
+      assertInt32(toFixedHundredths(vector.x, `${context}.x`), `${context}.x`),
+    );
+    buffer.writeInt32(
+      assertInt32(toFixedHundredths(vector.y, `${context}.y`), `${context}.y`),
+    );
   }
 }
 
@@ -601,7 +606,7 @@ function writeInt64(buffer: ByteBuffer, value: number): void {
 }
 
 function toFixedHundredths(value: EntityAttributeValue, context: string): number {
-  return assertInt32(Math.floor(assertNumber(value, context) * 100), context);
+  return Math.floor(assertNumber(value, context) * 100);
 }
 
 function assertUint32(value: EntityAttributeValue, context: string): number {
