@@ -216,6 +216,12 @@ test("session automation IPC returns defaults, applies settings immediately, and
             settings: {},
           },
           {
+            id: "autoPet",
+            enabled: true,
+            status: "starting",
+            settings: {},
+          },
+          {
             id: "autoRebuilder",
             enabled: false,
             status: "disabled",
@@ -262,6 +268,7 @@ test("session automation IPC returns defaults, applies settings immediately, and
             status: "running",
             settings: { players: false, zombies: true, npcs: true },
           },
+          {},
           {},
           {},
           {},

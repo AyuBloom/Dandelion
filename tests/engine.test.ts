@@ -418,7 +418,7 @@ test("password-protected sessions reject invalid credentials", async () => {
     close: (code: number) => closed.push(code),
   });
 
-  expect(closed).toEqual([1008, 1008]);
+  expect(closed).toEqual([4001, 4001]);
   expect(engine.listeners.has("rejected")).toBeFalse();
   expect(engine.listeners.has("accepted")).toBeTrue();
   expect(engine.listeners.has("replayed")).toBeFalse();

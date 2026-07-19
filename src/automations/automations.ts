@@ -2,6 +2,7 @@ export const AvailableAutomations = [
   "ahrc",
   "autoAim",
   "autoBow",
+  "autoPet",
   "autoRebuilder",
   "autoUpgrader",
   "aulht",
@@ -21,6 +22,7 @@ export interface AutoAimSettings {
 }
 
 export type AutoBowSettings = Record<never, never>;
+export type AutoPetSettings = Record<never, never>;
 export type AutoRebuilderSettings = Record<never, never>;
 export type AutoUpgraderSettings = Record<never, never>;
 export type AulhtSettings = Record<never, never>;
@@ -29,6 +31,7 @@ export interface AutomationSettingsById {
   ahrc: AhrcSettings;
   autoAim: AutoAimSettings;
   autoBow: AutoBowSettings;
+  autoPet: AutoPetSettings;
   autoRebuilder: AutoRebuilderSettings;
   autoUpgrader: AutoUpgraderSettings;
   aulht: AulhtSettings;
@@ -127,6 +130,17 @@ export const AutomationCatalog = {
       rpcNames: [],
     },
   },
+  autoPet: {
+    id: "autoPet",
+    label: "Auto Evolve & Revive",
+    description: "Automatically evolves and revives the equipped pet.",
+    implemented: true,
+    settings: [],
+    ownership: {
+      inputFields: [],
+      rpcNames: ["BuyItem", "EquipItem"],
+    },
+  },
   autoRebuilder: {
     id: "autoRebuilder",
     label: "Auto Rebuilder",
@@ -218,6 +232,11 @@ export function createDefaultAutomationState(): AutomationState {
     },
     autoBow: {
       enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoPet: {
+      enabled: true,
       settings: {},
       error: null,
     },

@@ -15,6 +15,7 @@ import { createAhrcAutomation } from "./ahrc.ts";
 import { createAulhtAutomation } from "./aulht.ts";
 import { createAutoAimAutomation } from "./auto-aim.ts";
 import { createAutoBowAutomation } from "./auto-bow.ts";
+import { createAutoPetAutomation } from "./auto-pet.ts";
 import { createAutoRebuilderAutomation } from "./auto-rebuilder.ts";
 import { createAutoUpgraderAutomation } from "./auto-upgrader.ts";
 
@@ -57,6 +58,7 @@ export const DefaultAutomationFactories: Record<AutomationId, AutomationFactory>
   ahrc: createAhrcAutomation,
   autoAim: createAutoAimAutomation,
   autoBow: createAutoBowAutomation,
+  autoPet: createAutoPetAutomation,
   autoRebuilder: createAutoRebuilderAutomation,
   autoUpgrader: createAutoUpgraderAutomation,
   aulht: createAulhtAutomation,

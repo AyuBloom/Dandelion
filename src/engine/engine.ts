@@ -112,6 +112,7 @@ const AUTH_TOKEN_TTL_MS = 60_000;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 const MAX_AUTH_FAILURES = 5;
 const AUTH_DIRECTORY = ".session-auth";
+const AUTH_REQUIRED_CLOSE_CODE = 4001;
 const AUTOMATION_REQUEST_TIMEOUT_MS = 3_000;
 const allowedListenerOpcodes = new Set<number>([
   PacketIds.PACKET_INPUT,
@@ -643,7 +644,7 @@ export class Engine {
     }
 
     if (!this.consumeAuthToken(sessionId, query.token)) {
-      ws.close(1008);
+      ws.close(AUTH_REQUIRED_CLOSE_CODE);
       return;
     }
     ws.binaryType = "arraybuffer";

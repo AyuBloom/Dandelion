@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dandelion Session Saver
 // @namespace    https://github.com/AyuBloom/Dandelion
-// @version      0.1.3
+// @version      0.1.4
 // @description  Manage and attach Dandelion sessions from the ZOMBS.io client.
 // @match        https://zombs.io/*
 // @match        https://www.zombs.io/*
@@ -22,6 +22,7 @@
   "use strict";
 
   const STORAGE_KEY = "dandelion.session-saver.v1";
+  const AUTH_REQUIRED_CLOSE_CODE = 4001;
   const DEFAULT_HOST = {
     id: "local",
     name: "Local",
@@ -79,20 +80,20 @@
       .dot[data-tone="bad"] { background: #c9523c; }
       .panel {
         position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-        width: min(430px, calc(100vw - 40px)); max-height: calc(100vh - 40px);
-        overflow: hidden; border: 0; border-radius: 4px;
+        width: min(430px, calc(100vw - 40px)); max-height: 50vh;
+        overflow: hidden; border: 0; border-radius: 4px; display: flex; flex-direction: column;
         background: rgba(0, 0, 0, .6); box-shadow: 0 2px 10px rgba(0, 0, 0, .2);
       }
-      .header { height: 54px; padding: 0 10px 0 16px; display: flex; align-items: center; gap: 10px; }
+      .header { height: 54px; padding: 0 10px 0 16px; display: flex; flex: none; align-items: center; gap: 10px; }
       .brand { font-size: 18px; flex: 1; }
       .header-status { color: rgba(255, 255, 255, .7); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .icon-button { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 4px; background: rgba(255, 255, 255, .1); color: #eee; font-size: 18px; transition: all .15s ease-in-out; }
-      .host-bar { padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; background: rgba(0, 0, 0, .2); }
-      .tabs { padding: 10px 0 0; display: flex; justify-content: flex-start; }
+      .host-bar { padding: 10px; display: grid; flex: none; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; background: rgba(0, 0, 0, .2); }
+      .tabs { padding: 10px 0 0; display: flex; flex: none; justify-content: flex-start; }
       .tab { width: auto; height: 38px; padding: 0 14px; border: 0; border-radius: 0; background: rgba(0, 0, 0, .35); color: rgba(255, 255, 255, .7); transition: all .15s ease-in-out; }
       .tab:last-child { border-radius: 0 3px 0 0; }
       .tab:hover, .tab:focus-visible, .tab[aria-selected="true"] { color: #eee; background: rgba(0, 0, 0, .2); outline: 0; }
-      .body { max-height: calc(100vh - 172px); overflow: auto; background: rgba(0, 0, 0, .2); }
+      .body { min-height: 0; overflow: auto; background: rgba(0, 0, 0, .2); }
       .view { padding: 12px 10px 10px; }
       select, input {
         width: 100%; min-width: 0; height: 40px; padding: 0 12px; border: 2px solid transparent;
@@ -1032,10 +1033,29 @@
       });
     });
 
+    state.game.ui.on?.("playerPetTickUpdate", (petTick) => {
+      const target = state.activeAttachment;
+      if (!target || target.equippedPetSynced || network.socket !== target.socket) return;
+
+      const petModel = petTick?.model;
+      const petTier = typeof petModel === "string"
+        ? state.game.ui.getInventory?.()?.[petModel]?.tier
+        : undefined;
+      if (!Number.isInteger(petTier) || petTier < 1) return;
+
+      network.sendRpc({
+        name: "EquipItem",
+        itemName: petModel,
+        tier: petTier,
+      });
+      target.equippedPetSynced = true;
+    });
+
     network.addEnterWorldHandler((data) => {
       const target = state.activeAttachment;
       if (!target || network.socket !== target.socket || !data?.allowed) return;
       target.checkInitialDeath = true;
+      target.equippedPetSynced = false;
       target.everInWorld = true;
       target.awaitingPassword = false;
       target.retryDelay = 1000;
@@ -1079,7 +1099,7 @@
         scheduleReconnect(target);
         return;
       }
-      if (target.password && [401, 404, 429].includes(error.status)) {
+      if (target.password && error.status === 401) {
         target.password = undefined;
         await requestPasswordAndRetry(target, error.message);
         return;
@@ -1095,7 +1115,7 @@
     if (state.activeAttachment !== target) return;
     state.network.connecting = false;
     state.network.connected = false;
-    if (!target.everInWorld && event.code === 1008 && !target.password) {
+    if (!target.everInWorld && event.code === AUTH_REQUIRED_CLOSE_CODE && !target.password) {
       await requestPasswordAndRetry(target, "Password required");
       return;
     }

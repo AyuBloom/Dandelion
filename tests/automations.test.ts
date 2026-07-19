@@ -31,6 +31,11 @@ test("automation catalog exposes default-on checkboxes and narrow ownership", ()
       settings: {},
       error: null,
     },
+    autoPet: {
+      enabled: true,
+      settings: {},
+      error: null,
+    },
     autoRebuilder: {
       enabled: false,
       settings: {},
@@ -49,6 +54,11 @@ test("automation catalog exposes default-on checkboxes and narrow ownership", ()
   });
   expect(AutomationCatalog.autoAim.ownership.inputFields).not.toContain("up");
   expect(AutomationCatalog.autoAim.ownership.inputFields).not.toContain("left");
+  expect(AutomationCatalog.autoPet).toMatchObject({
+    label: "Auto Evolve & Revive",
+    implemented: true,
+    ownership: { rpcNames: ["BuyItem", "EquipItem"] },
+  });
   expect(AutomationCatalog.autoRebuilder.ownership.rpcNames).toEqual([
     "MakeBuilding",
     "UpgradeBuilding",
@@ -364,6 +374,11 @@ test("saved automation state is normalized against current defaults", () => {
     },
     autoBow: {
       enabled: false,
+      settings: {},
+      error: null,
+    },
+    autoPet: {
+      enabled: true,
       settings: {},
       error: null,
     },
